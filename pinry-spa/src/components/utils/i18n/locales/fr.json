@@ -79,5 +79,9 @@
     "imageSourceLabel": "Source de l'image",
     "tagsLabel": "Tags",
     "descriptionLabel": "Description",
-    "selectBoardLabel": "Selectionner un tableau"
+    "selectBoardLabel": "Selectionner un tableau",
+    "refreshPreviewButton": "Actualiser l'aperçu",
+    "refreshingPreview": "Actualisation...",
+    "previewRefreshed": "Aperçu actualisé avec succès",
+    "previewRefreshFailed": "Échec de l'actualisation, ancien aperçu conservé"
 }

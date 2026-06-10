@@ -328,6 +328,7 @@ class PinRefreshTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         pin_id = response.data['id']
         old_image_id = response.data['image']['id']
+        old_image_name = response.data['image']['image']
 
         pin_url = reverse("pin-detail", kwargs={"pk": pin_id})
         patch_data = {
@@ -337,10 +338,13 @@ class PinRefreshTests(APITestCase):
         response = self.client.patch(pin_url, data=patch_data, format="json")
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
 
-        pin.refresh_from_db()
+        pin = Pin.objects.get(id=pin_id)
         self.assertEqual(pin.url, url2)
         self.assertEqual(pin.description, 'Updated version')
         self.assertEqual(pin.image.id, old_image_id)
+
+        new_image_name = response.data['image']['image']
+        self.assertNotEqual(old_image_name, new_image_name)
 
         self.assertIsNotNone(pin.image.image)
         self.assertTrue(pin.image.thumbnail)
@@ -406,15 +410,22 @@ class PinRefreshTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         pin_id = response.data['id']
         old_image_name = response.data['image']['image']
+        old_url = response.data['url']
+        old_image_id = response.data['image']['id']
+
+        pin = Pin.objects.get(id=pin_id)
+        old_image_path = pin.image.image.name
 
         pin_url = reverse("pin-detail", kwargs={"pk": pin_id})
         patch_data = {
-            'url': url.upper(),
+            'url': url + '#fragment',
             'description': 'Just updating description'
         }
         response = self.client.patch(pin_url, data=patch_data, format="json")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
         pin = Pin.objects.get(id=pin_id)
-        self.assertEqual(pin.image.image.url, old_image_name)
+        self.assertEqual(pin.image.image.name, old_image_path)
+        self.assertEqual(pin.image.id, old_image_id)
         self.assertEqual(pin.description, 'Just updating description')
+        self.assertEqual(pin.url, old_url)

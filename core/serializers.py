@@ -157,9 +157,9 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
         if 'url' in validated_data:
             new_url = normalize_url(validated_data['url'])
             old_url = normalize_url(instance.url) if instance.url else None
+            validated_data['url'] = new_url
             if new_url and new_url != old_url:
                 url_changed = True
-                validated_data['url'] = new_url
 
         if 'referer' in validated_data and validated_data['referer']:
             validated_data['referer'] = normalize_url(validated_data['referer'])
