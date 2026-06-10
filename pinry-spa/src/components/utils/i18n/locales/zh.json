@@ -79,5 +79,9 @@
   "imageSourceLabel": "图片来源",
   "tagsLabel": "标签",
   "descriptionLabel": "描述",
-  "selectBoardLabel": "选择画板"
+  "selectBoardLabel": "选择画板",
+  "refreshPreviewButton": "刷新预览",
+  "refreshingPreview": "刷新中...",
+  "previewRefreshed": "预览刷新成功",
+  "previewRefreshFailed": "预览刷新失败，保留旧预览"
 }

@@ -286,3 +286,135 @@ class PinTests(APITestCase):
         uri = reverse("pin-detail", kwargs={"pk": pin.pk})
         self.client.delete(uri)
         self.assertEqual(Pin.objects.count(), 0)
+
+
+class PinRefreshTests(APITestCase):
+
+    def setUp(self):
+        super(PinRefreshTests, self).setUp()
+        self.user = create_user("default")
+        self.client.login(username=self.user.username, password='password')
+
+    def tearDown(self):
+        _teardown_models()
+
+    @mock.patch('requests.get', mock_requests_get)
+    def test_url_normalization_on_create(self):
+        url = 'HTTP://TESTSERVER.COM/Path/To/Image.PNG#fragment'
+        normalized_url = 'http://testserver.com/Path/To/Image.PNG'
+        create_url = reverse("pin-list")
+        post_data = {
+            'url': url,
+            'private': False,
+            'description': 'Test URL normalization'
+        }
+        response = self.client.post(create_url, data=post_data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        pin = Pin.objects.get(id=response.data['id'])
+        self.assertEqual(pin.url, normalized_url)
+
+    @mock.patch('requests.get', mock_requests_get)
+    def test_refresh_preview_on_url_change(self):
+        url1 = 'http://testserver.com/mocked/logo-01.png'
+        url2 = 'http://testserver.com/mocked/logo-02.png'
+
+        create_url = reverse("pin-list")
+        post_data = {
+            'url': url1,
+            'private': False,
+            'description': 'First version'
+        }
+        response = self.client.post(create_url, data=post_data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        pin_id = response.data['id']
+        old_image_id = response.data['image']['id']
+
+        pin_url = reverse("pin-detail", kwargs={"pk": pin_id})
+        patch_data = {
+            'url': url2,
+            'description': 'Updated version'
+        }
+        response = self.client.patch(pin_url, data=patch_data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+
+        pin.refresh_from_db()
+        self.assertEqual(pin.url, url2)
+        self.assertEqual(pin.description, 'Updated version')
+        self.assertEqual(pin.image.id, old_image_id)
+
+        self.assertIsNotNone(pin.image.image)
+        self.assertTrue(pin.image.thumbnail)
+        self.assertTrue(pin.image.square)
+        self.assertTrue(pin.image.standard)
+
+    @mock.patch('requests.get', mock_requests_get_with_non_image_content)
+    def test_refresh_failure_keeps_old_preview(self):
+        with mock.patch('requests.get', mock_requests_get):
+            url1 = 'http://testserver.com/mocked/logo-01.png'
+            create_url = reverse("pin-list")
+            post_data = {
+                'url': url1,
+                'private': False,
+                'description': 'First version'
+            }
+            response = self.client.post(create_url, data=post_data, format="json")
+            self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+            pin_id = response.data['id']
+            old_image_path = Pin.objects.get(id=pin_id).image.image.name
+
+        invalid_url = 'http://testserver.com/mocked/invalid.txt'
+        pin_url = reverse("pin-detail", kwargs={"pk": pin_id})
+        patch_data = {
+            'url': invalid_url,
+        }
+        response = self.client.patch(pin_url, data=patch_data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('url', response.data)
+        self.assertIn('old preview retained', str(response.data['url']).lower())
+
+        pin = Pin.objects.get(id=pin_id)
+        self.assertEqual(pin.url, url1)
+        self.assertEqual(pin.image.image.name, old_image_path)
+
+    @mock.patch('requests.get', mock_requests_get)
+    def test_referer_normalization(self):
+        url = 'http://testserver.com/mocked/logo-01.png'
+        referer = 'HTTP://EXAMPLE.COM/Source/Page/'
+        normalized_referer = 'http://example.com/Source/Page'
+
+        create_url = reverse("pin-list")
+        post_data = {
+            'url': url,
+            'referer': referer,
+            'private': False,
+        }
+        response = self.client.post(create_url, data=post_data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        pin = Pin.objects.get(id=response.data['id'])
+        self.assertEqual(pin.referer, normalized_referer)
+
+    @mock.patch('requests.get', mock_requests_get)
+    def test_same_url_does_not_refresh(self):
+        url = 'http://testserver.com/mocked/logo-01.png'
+
+        create_url = reverse("pin-list")
+        post_data = {
+            'url': url,
+            'private': False,
+        }
+        response = self.client.post(create_url, data=post_data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        pin_id = response.data['id']
+        old_image_name = response.data['image']['image']
+
+        pin_url = reverse("pin-detail", kwargs={"pk": pin_id})
+        patch_data = {
+            'url': url.upper(),
+            'description': 'Just updating description'
+        }
+        response = self.client.patch(pin_url, data=patch_data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        pin = Pin.objects.get(id=pin_id)
+        self.assertEqual(pin.image.image.url, old_image_name)
+        self.assertEqual(pin.description, 'Just updating description')

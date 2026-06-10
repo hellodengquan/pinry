@@ -6,6 +6,7 @@ from taggit.models import Tag
 
 from core.models import Image, Board
 from core.models import Pin
+from core.models import normalize_url
 from django_images.models import Thumbnail
 from users.serializers import UserSerializer
 from users.models import User
@@ -125,13 +126,17 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
 
         submitter = self.context['request'].user
         if 'url' in validated_data and validated_data['url']:
-            url = validated_data['url']
+            url = normalize_url(validated_data['url'])
+            referer = validated_data.get('referer', url)
+            normalized_referer = normalize_url(referer) if referer else url
             image = Image.objects.create_for_url(
                 url,
-                validated_data.get('referer', url),
+                normalized_referer,
             )
             if not image:
                 raise ValidationError({"url": "invalid image content"})
+            validated_data['url'] = url
+            validated_data['referer'] = normalized_referer
         else:
             image = validated_data.pop("image_by_id")
         tags = validated_data.pop('tag_list', [])
@@ -146,8 +151,31 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
             instance.tags.set(*tags)
         else:
             instance.tags.set()
-        # change for image-id or image is not allowed
         validated_data.pop('image_by_id', None)
+
+        url_changed = False
+        if 'url' in validated_data:
+            new_url = normalize_url(validated_data['url'])
+            old_url = normalize_url(instance.url) if instance.url else None
+            if new_url and new_url != old_url:
+                url_changed = True
+                validated_data['url'] = new_url
+
+        if 'referer' in validated_data and validated_data['referer']:
+            validated_data['referer'] = normalize_url(validated_data['referer'])
+
+        if url_changed and validated_data['url']:
+            referer = validated_data.get('referer', instance.referer) or validated_data['url']
+            normalized_referer = normalize_url(referer)
+            image, success = Image.objects.refresh_for_url(
+                instance.image,
+                validated_data['url'],
+                normalized_referer,
+            )
+            if not success:
+                raise ValidationError({"url": "failed to fetch preview image, old preview retained"})
+            validated_data['referer'] = normalized_referer
+
         return super(PinSerializer, self).update(instance, validated_data)
 
 

@@ -1,5 +1,6 @@
 import PIL.Image
 import requests
+from urllib.parse import urlparse, urlunparse
 
 from io import BytesIO
 
@@ -9,9 +10,33 @@ from django.db import models
 from django.dispatch import receiver
 
 from django_images.models import Image as BaseImage, Thumbnail
+from django_images.settings import IMAGE_AUTO_DELETE
 from taggit.managers import TaggableManager
 
 from users.models import User
+
+
+def normalize_url(url):
+    if not url:
+        return url
+    try:
+        parsed = urlparse(url)
+        scheme = parsed.scheme.lower() if parsed.scheme else 'https'
+        netloc = parsed.netloc.lower() if parsed.netloc else ''
+        path = parsed.path.rstrip('/') if parsed.path else ''
+        if path and not path.startswith('/'):
+            path = '/' + path
+        normalized = urlunparse((
+            scheme,
+            netloc,
+            path,
+            parsed.params,
+            parsed.query,
+            '',
+        ))
+        return normalized
+    except ValueError:
+        return url
 
 
 class ImageManager(models.Manager):
@@ -33,25 +58,56 @@ class ImageManager(models.Manager):
             fp.seek(0)
             return True
 
-    # FIXME: Move this into an asynchronous task
-    def create_for_url(self, url, referer=None):
+    def _fetch_image_content(self, url, referer=None):
         file_name = url.split("/")[-1].split('#')[0].split('?')[0]
         buf = BytesIO()
         headers = dict(self._default_ua)
         if referer is not None:
             headers["Referer"] = referer
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
         buf.write(response.content)
         if not self._is_valid_image(buf):
-            return None
+            return None, None
         obj = InMemoryUploadedFile(buf, 'image', file_name,
                                    None, buf.tell(), None)
-        # create the image and its thumbnails in one transaction, removing
-        # a chance of getting Database into a inconsistent state when we
-        # try to create thumbnails one by one later
+        return obj, buf
+
+    # FIXME: Move this into an asynchronous task
+    def create_for_url(self, url, referer=None):
+        normalized_url = normalize_url(url)
+        normalized_referer = normalize_url(referer) if referer else normalized_url
+        try:
+            obj, buf = self._fetch_image_content(normalized_url, normalized_referer)
+        except requests.RequestException:
+            return None
+        if not obj:
+            return None
         image = self.create(image=obj)
         Thumbnail.objects.get_or_create_at_sizes(image, settings.IMAGE_SIZES.keys())
         return image
+
+    def refresh_for_url(self, image_instance, url, referer=None):
+        normalized_url = normalize_url(url)
+        normalized_referer = normalize_url(referer) if referer else normalized_url
+        try:
+            obj, buf = self._fetch_image_content(normalized_url, normalized_referer)
+        except requests.RequestException:
+            return None, False
+        if not obj:
+            return None, False
+        old_image_path = image_instance.image.name
+        image_instance.image = obj
+        image_instance.save()
+        Thumbnail.objects.get_or_create_at_sizes(image_instance, settings.IMAGE_SIZES.keys())
+        if IMAGE_AUTO_DELETE and old_image_path:
+            try:
+                storage = image_instance.image.storage
+                if storage.exists(old_image_path):
+                    storage.delete(old_image_path)
+            except Exception:
+                pass
+        return image_instance, True
 
 
 class Image(BaseImage):
@@ -109,6 +165,21 @@ class Pin(models.Model):
 
     def tag_list(self):
         return self.tags.all()
+
+    def refresh_preview(self):
+        if not self.url:
+            return False, "URL is required"
+        normalized_url = normalize_url(self.url)
+        normalized_referer = normalize_url(self.referer) if self.referer else normalized_url
+        image, success = Image.objects.refresh_for_url(
+            self.image, normalized_url, normalized_referer
+        )
+        if success:
+            self.url = normalized_url
+            self.referer = normalized_referer if normalized_referer else normalized_url
+            self.save(update_fields=['url', 'referer'])
+            return True, "Preview refreshed successfully"
+        return False, "Failed to refresh preview"
 
     def __unicode__(self):
         return '%s - %s' % (self.submitter, self.published)

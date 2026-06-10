@@ -17,7 +17,7 @@
             </div>
             <div class="column">
               <b-field v-bind:label="$t('imageUrlLabel')"
-                       v-show="!disableUrlField && !isEdit"
+                       v-show="!disableUrlField"
                        :type="pinModel.form.url.type"
                        :message="pinModel.form.url.error">
                 <b-input
@@ -28,6 +28,19 @@
                 >
                 </b-input>
               </b-field>
+              <div v-if="isEdit && pinModel.form.url.value" class="field is-grouped">
+                <p class="control">
+                  <button
+                    class="button is-info"
+                    type="button"
+                    @click="refreshPreview"
+                    :disabled="isRefreshing"
+                  >
+                    <span v-if="isRefreshing">{{ $t("refreshingPreview") }}</span>
+                    <span v-else>{{ $t("refreshPreviewButton") }}</span>
+                  </button>
+                </p>
+              </div>
               <b-field v-bind:label="$t('privacyOptionLabel')"
                        :type="pinModel.form.private.type"
                        :message="pinModel.form.private.error">
@@ -150,6 +163,7 @@ export default {
     pinModel.form.tags.value = [];
     return {
       disableUrlField: false,
+      isRefreshing: false,
       pinModel,
       formUpload: {
         imageId: null,
@@ -231,7 +245,7 @@ export default {
     savePin() {
       const self = this;
       const data = this.pinModel.asDataByFields(
-        ['referer', 'description', 'tags', 'private'],
+        ['url', 'referer', 'description', 'tags', 'private'],
       );
       const promise = API.Pin.updateById(this.existedPin.id, data);
       promise.then(
@@ -239,6 +253,38 @@ export default {
           bus.bus.$emit(bus.events.refreshPin);
           self.$emit('pinUpdated', resp);
           self.$parent.close();
+        },
+        (error) => {
+          if (error.response && error.response.data && error.response.data.url) {
+            self.pinModel.form.url.type = 'is-danger';
+            self.pinModel.form.url.error = error.response.data.url;
+          }
+        },
+      );
+    },
+    refreshPreview() {
+      const self = this;
+      this.isRefreshing = true;
+      this.pinModel.form.url.type = '';
+      this.pinModel.form.url.error = '';
+      const data = this.pinModel.asDataByFields(
+        ['url', 'referer'],
+      );
+      API.Pin.updateById(this.existedPin.id, data).then(
+        (resp) => {
+          self.isRefreshing = false;
+          self.pinModel.form.url.type = 'is-success';
+          self.pinModel.form.url.error = self.$t('previewRefreshed');
+          self.$emit('pinUpdated', resp);
+        },
+        (error) => {
+          self.isRefreshing = false;
+          self.pinModel.form.url.type = 'is-warning';
+          if (error.response && error.response.data && error.response.data.url) {
+            self.pinModel.form.url.error = error.response.data.url;
+          } else {
+            self.pinModel.form.url.error = self.$t('previewRefreshFailed');
+          }
         },
       );
     },
