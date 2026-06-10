@@ -409,7 +409,6 @@ class PinRefreshTests(APITestCase):
         response = self.client.post(create_url, data=post_data, format="json")
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         pin_id = response.data['id']
-        old_image_name = response.data['image']['image']
         old_url = response.data['url']
         old_image_id = response.data['image']['id']
 
@@ -429,3 +428,182 @@ class PinRefreshTests(APITestCase):
         self.assertEqual(pin.image.id, old_image_id)
         self.assertEqual(pin.description, 'Just updating description')
         self.assertEqual(pin.url, old_url)
+
+
+class ThumbnailRefreshTests(APITestCase):
+
+    def setUp(self):
+        super(ThumbnailRefreshTests, self).setUp()
+        self.user = create_user("default")
+        self.client.login(username=self.user.username, password='password')
+
+    def tearDown(self):
+        _teardown_models()
+
+    def _create_pin_with_mock(self, url, mock_func):
+        with mock.patch('requests.get', mock_func):
+            create_url = reverse("pin-list")
+            post_data = {
+                'url': url,
+                'private': False,
+            }
+            response = self.client.post(create_url, data=post_data, format="json")
+            self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+            return response.data
+
+    def _get_file_md5(self, file_field):
+        import hashlib
+        hasher = hashlib.md5()
+        file_field.open()
+        for chunk in file_field.chunks():
+            hasher.update(chunk)
+        file_field.close()
+        return hasher.hexdigest()
+
+    @mock.patch('requests.get', mock_requests_get)
+    def test_thumbnails_updated_on_refresh(self):
+        url1 = 'http://testserver.com/mocked/logo-01.png'
+        url2 = 'http://testserver.com/mocked/logo-02.png'
+
+        pin_data = self._create_pin_with_mock(url1, mock_requests_get)
+        pin_id = pin_data['id']
+
+        old_thumbnail_name = pin_data['image']['thumbnail']['image']
+        old_square_name = pin_data['image']['square']['image']
+        old_standard_name = pin_data['image']['standard']['image']
+
+        pin = Pin.objects.get(id=pin_id)
+        old_image_md5 = self._get_file_md5(pin.image.image)
+        old_thumbnail_md5 = self._get_file_md5(pin.image.thumbnail.image)
+
+        def mock_requests_get_updated(url, **kwargs):
+            if 'logo-02' in url:
+                response = mock.Mock()
+                response.content = open('docs/src/imgs/logo-light.png', 'rb').read()
+                return response
+            return mock_requests_get(url, **kwargs)
+
+        with mock.patch('requests.get', mock_requests_get_updated):
+            pin_url = reverse("pin-detail", kwargs={"pk": pin_id})
+            patch_data = {'url': url2}
+            response = self.client.patch(pin_url, data=patch_data, format="json")
+            self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+
+        pin.refresh_from_db()
+        pin.image.refresh_from_db()
+
+        new_thumbnail_name = response.data['image']['thumbnail']['image']
+        new_square_name = response.data['image']['square']['image']
+        new_standard_name = response.data['image']['standard']['image']
+
+        self.assertNotEqual(old_thumbnail_name, new_thumbnail_name)
+        self.assertNotEqual(old_square_name, new_square_name)
+        self.assertNotEqual(old_standard_name, new_standard_name)
+
+        new_image_md5 = self._get_file_md5(pin.image.image)
+        new_thumbnail_md5 = self._get_file_md5(pin.image.thumbnail.image)
+
+        self.assertNotEqual(old_image_md5, new_image_md5)
+        self.assertNotEqual(old_thumbnail_md5, new_thumbnail_md5)
+
+    @mock.patch('requests.get', mock_requests_get)
+    def test_old_thumbnail_files_cleaned_on_refresh(self):
+        from django_images.models import Thumbnail as ThumbnailModel
+
+        url1 = 'http://testserver.com/mocked/logo-01.png'
+        url2 = 'http://testserver.com/mocked/logo-02.png'
+
+        pin_data = self._create_pin_with_mock(url1, mock_requests_get)
+        pin_id = pin_data['id']
+
+        pin = Pin.objects.get(id=pin_id)
+        old_thumbnail_paths = [
+            pin.image.thumbnail.image.name,
+            pin.image.square.image.name,
+            pin.image.standard.image.name,
+        ]
+        old_thumbnail_ids = [
+            pin.image.thumbnail.id,
+            pin.image.square.id,
+            pin.image.standard.id,
+        ]
+
+        storage = pin.image.image.storage
+        for path in old_thumbnail_paths:
+            self.assertTrue(storage.exists(path), f"Old thumbnail should exist: {path}")
+
+        def mock_requests_get_updated(url, **kwargs):
+            if 'logo-02' in url:
+                response = mock.Mock()
+                response.content = open('docs/src/imgs/logo-light.png', 'rb').read()
+                return response
+            return mock_requests_get(url, **kwargs)
+
+        with mock.patch('requests.get', mock_requests_get_updated):
+            pin_url = reverse("pin-detail", kwargs={"pk": pin_id})
+            patch_data = {'url': url2}
+            response = self.client.patch(pin_url, data=patch_data, format="json")
+            self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+
+        pin.refresh_from_db()
+
+        new_thumbnail_ids = [
+            pin.image.thumbnail.id,
+            pin.image.square.id,
+            pin.image.standard.id,
+        ]
+
+        for old_id, new_id in zip(old_thumbnail_ids, new_thumbnail_ids):
+            self.assertNotEqual(old_id, new_id, "Thumbnail records should be recreated with new IDs")
+
+        for old_id in old_thumbnail_ids:
+            self.assertFalse(
+                ThumbnailModel.objects.filter(id=old_id).exists(),
+                f"Old thumbnail record should be deleted: {old_id}"
+            )
+
+        for path in old_thumbnail_paths:
+            self.assertFalse(
+                storage.exists(path),
+                f"Old thumbnail file should be deleted: {path}"
+            )
+
+    @mock.patch('requests.get', mock_requests_get)
+    def test_api_returns_updated_thumbnails(self):
+        url1 = 'http://testserver.com/mocked/logo-01.png'
+        url2 = 'http://testserver.com/mocked/logo-02.png'
+
+        pin_data = self._create_pin_with_mock(url1, mock_requests_get)
+        pin_id = pin_data['id']
+
+        old_thumbnail_url = pin_data['image']['thumbnail']['image']
+
+        def mock_requests_get_updated(url, **kwargs):
+            if 'logo-02' in url:
+                response = mock.Mock()
+                response.content = open('docs/src/imgs/logo-light.png', 'rb').read()
+                return response
+            return mock_requests_get(url, **kwargs)
+
+        with mock.patch('requests.get', mock_requests_get_updated):
+            pin_url = reverse("pin-detail", kwargs={"pk": pin_id})
+            patch_data = {'url': url2}
+            response = self.client.patch(pin_url, data=patch_data, format="json")
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        new_thumbnail_url = response.data['image']['thumbnail']['image']
+        self.assertNotEqual(old_thumbnail_url, new_thumbnail_url)
+
+        list_url = reverse("pin-list")
+        response = self.client.get(list_url, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        pin_in_list = None
+        for result in response.data['results']:
+            if result['id'] == pin_id:
+                pin_in_list = result
+                break
+
+        self.assertIsNotNone(pin_in_list)
+        self.assertNotEqual(pin_in_list['image']['thumbnail']['image'], old_thumbnail_url)
+        self.assertEqual(pin_in_list['image']['thumbnail']['image'], new_thumbnail_url)

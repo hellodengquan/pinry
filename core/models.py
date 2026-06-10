@@ -96,17 +96,46 @@ class ImageManager(models.Manager):
             return None, False
         if not obj:
             return None, False
+
         old_image_path = image_instance.image.name
+        storage = image_instance.image.storage
+
+        old_thumbnails = list(image_instance.thumbnail_set.all())
+        old_thumbnail_paths = [thumb.image.name for thumb in old_thumbnails if thumb.image.name]
+        old_thumbnail_ids = [thumb.id for thumb in old_thumbnails]
+
         image_instance.image = obj
         image_instance.save()
-        Thumbnail.objects.get_or_create_at_sizes(image_instance, settings.IMAGE_SIZES.keys())
-        if IMAGE_AUTO_DELETE and old_image_path:
+
+        if old_thumbnail_ids:
             try:
-                storage = image_instance.image.storage
-                if storage.exists(old_image_path):
-                    storage.delete(old_image_path)
+                from django.db import transaction
+                with transaction.atomic():
+                    from django_images.models import Thumbnail as ThumbnailModel
+                    deleted = ThumbnailModel.objects.filter(id__in=old_thumbnail_ids).delete()
             except Exception:
                 pass
+
+        if hasattr(image_instance, '_prefetched_objects_cache'):
+            image_instance._prefetched_objects_cache.pop('thumbnail_set', None)
+
+        Thumbnail.objects.create_at_sizes(image_instance, settings.IMAGE_SIZES.keys())
+
+        if IMAGE_AUTO_DELETE:
+            for path in old_thumbnail_paths:
+                try:
+                    if storage.exists(path):
+                        storage.delete(path)
+                except Exception:
+                    pass
+
+            if old_image_path:
+                try:
+                    if storage.exists(old_image_path):
+                        storage.delete(old_image_path)
+                except Exception:
+                    pass
+
         return image_instance, True
 
 

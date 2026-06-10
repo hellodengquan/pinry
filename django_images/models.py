@@ -85,14 +85,33 @@ class ThumbnailManager(models.Manager):
                     [IMAGE_SIZES[size] for size in sizes_to_create])
             ]
             for size, buf in zip(sizes_to_create, bufs):
-                # and save to storage
                 original_dir, original_file = os.path.split(image.image.name)
                 thumb_file = InMemoryUploadedFile(buf, "image", original_file,
                                                   None, buf.tell(), None)
                 sized[size], created = image.thumbnail_set.get_or_create(
                     size=size, defaults={'image': thumb_file})
 
-        # Make sure this is in the correct order
+        return [sized[size] for size in sizes]
+
+    def create_at_sizes(self, image, sizes):
+        sized = {}
+        for size in sizes:
+            if size not in IMAGE_SIZES:
+                raise ValueError("Received unknown size: %s" % size)
+
+        bufs = [
+            utils.write_image_in_memory(img)
+            for img in utils.scale_and_crop_iter(
+                image.image,
+                [IMAGE_SIZES[size] for size in sizes])
+        ]
+        for size, buf in zip(sizes, bufs):
+            original_dir, original_file = os.path.split(image.image.name)
+            thumb_file = InMemoryUploadedFile(buf, "image", original_file,
+                                              None, buf.tell(), None)
+            sized[size] = image.thumbnail_set.create(
+                size=size, image=thumb_file)
+
         return [sized[size] for size in sizes]
 
 
