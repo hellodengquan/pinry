@@ -4,6 +4,30 @@ import PIL
 from PIL import Image
 
 
+try:
+    _RESAMPLE_ANTIALIAS = Image.Resampling.LANCZOS
+except AttributeError:
+    try:
+        _RESAMPLE_ANTIALIAS = Image.LANCZOS
+    except AttributeError:
+        _RESAMPLE_ANTIALIAS = Image.ANTIALIAS
+
+
+def _get_maxblock():
+    try:
+        return PIL.ImageFile.MAXBLOCK
+    except AttributeError:
+        return None
+
+
+def _set_maxblock(value):
+    try:
+        PIL.ImageFile.MAXBLOCK = value
+        return True
+    except AttributeError:
+        return False
+
+
 @contextmanager
 def open_django_file(field_file):
     field_file.open()
@@ -74,7 +98,7 @@ def scale_and_crop_single(image, size, crop=False, upscale=False, quality=None):
 
     if scale < 1.0 or (scale > 1.0 and upscale):
         im = im.resize((int(source_x * scale), int(source_y * scale)),
-                       resample=Image.ANTIALIAS)
+                       resample=_RESAMPLE_ANTIALIAS)
 
     if crop:
         # Use integer values now.
@@ -108,15 +132,16 @@ def write_image_in_memory(img):
         img.save(buf, img.format, **img.info)
     except IOError:
         if img.info.get('progression'):
-            orig_MAXBLOCK = PIL.ImageFile.MAXBLOCK
+            orig_MAXBLOCK = _get_maxblock()
             temp_MAXBLOCK = 1048576
-            if orig_MAXBLOCK >= temp_MAXBLOCK:
+            if orig_MAXBLOCK is not None and orig_MAXBLOCK >= temp_MAXBLOCK:
                 raise
-            PIL.ImageFile.MAXBLOCK = temp_MAXBLOCK
+            set_ok = _set_maxblock(temp_MAXBLOCK)
             try:
                 img.save(buf, img.format, **img.info)
             finally:
-                PIL.ImageFile.MAXBLOCK = orig_MAXBLOCK
+                if set_ok and orig_MAXBLOCK is not None:
+                    _set_maxblock(orig_MAXBLOCK)
         else:
             raise
     return buf
