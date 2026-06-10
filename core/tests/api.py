@@ -647,220 +647,533 @@ class PinVisibilityAndThumbnailTests(APITestCase):
         self.assertIsNotNone(resp.json()['cover'])
 
 
-class TokenAuthenticationTests(APITestCase):
-    """Token 认证、撤销和竞争条件测试"""
+class CrossUserPermissionBoundaryTests(APITestCase):
+    """跨用户权限边界场景测试 - 替代偏离的分享链接令牌测试
+    涵盖：他人私有图钉添加到自有看板、非所有者修改他人看板、
+    私有图钉缩略图访问控制、以及其他跨用户边界场景
+    """
 
     def setUp(self):
-        super(TokenAuthenticationTests, self).setUp()
-        from rest_framework.authtoken.models import Token
-        from users.models import create_token_if_necessary
-
-        self.owner = create_user("owner")
-        self.other_user = create_user("other")
-
-        self.owner_token = create_token_if_necessary(self.owner)
-        self.other_token = create_token_if_necessary(self.other_user)
+        super(CrossUserPermissionBoundaryTests, self).setUp()
+        self.owner_a = create_user("alice")
+        self.owner_b = create_user("bob")
+        self.third_user = create_user("charlie")
 
         with mock.patch('requests.get', mock_requests_get):
-            self.image = create_image()
+            self.image_a = create_image()
+            self.image_b = create_image()
 
-        self.private_pin = create_pin(self.owner, self.image, [])
-        self.private_pin.private = True
-        self.private_pin.save()
+        self.a_public_pin = create_pin(self.owner_a, self.image_a, [])
+        self.a_public_pin.private = False
+        self.a_public_pin.save()
 
-        self.public_board = Board.objects.create(
-            name="token_board",
-            submitter=self.owner,
-            private=False,
+        self.a_private_pin = create_pin(self.owner_a, self.image_a, [])
+        self.a_private_pin.private = True
+        self.a_private_pin.save()
+
+        self.b_public_pin = create_pin(self.owner_b, self.image_b, [])
+        self.b_public_pin.private = False
+        self.b_public_pin.save()
+
+        self.b_private_pin = create_pin(self.owner_b, self.image_b, [])
+        self.b_private_pin.private = True
+        self.b_private_pin.save()
+
+        self.a_public_board = Board.objects.create(
+            name="a_public_board", submitter=self.owner_a, private=False,
+        )
+        self.a_private_board = Board.objects.create(
+            name="a_private_board", submitter=self.owner_a, private=True,
+        )
+        self.b_public_board = Board.objects.create(
+            name="b_public_board", submitter=self.owner_b, private=False,
+        )
+        self.b_private_board = Board.objects.create(
+            name="b_private_board", submitter=self.owner_b, private=True,
         )
 
-        self.private_board = Board.objects.create(
-            name="token_private_board",
-            submitter=self.owner,
-            private=True,
-        )
-
-        self.pins_list_url = reverse("pin-list")
-        self.boards_list_url = reverse("board-list")
-        self.private_pin_url = reverse("pin-detail", kwargs={"pk": self.private_pin.pk})
-        self.private_board_url = reverse("board-detail", kwargs={"pk": self.private_board.pk})
+        self.a_public_board.pins.add(self.a_public_pin, self.a_private_pin)
 
     def tearDown(self):
-        from rest_framework.authtoken.models import Token
-        Token.objects.all().delete()
         _teardown_models()
 
-    def _auth_headers(self, token):
-        return {"HTTP_AUTHORIZATION": f"Token {token.key}"}
+    def test_user_b_cannot_add_as_private_pin_to_bs_board(self):
+        self.client.login(username=self.owner_b.username, password='password')
+        board_url = reverse("board-detail", kwargs={"pk": self.b_public_board.pk})
 
-    def test_valid_token_can_access_authenticated_endpoints(self):
-        resp = self.client.get(
-            self.boards_list_url,
-            **self._auth_headers(self.owner_token),
+        resp = self.client.patch(
+            board_url,
+            data={"pins_to_add": [self.a_private_pin.id]},
+            format='json',
         )
         self.assertEqual(resp.status_code, 200)
-        board_ids = [b['id'] for b in resp.json()]
-        self.assertIn(self.public_board.id, board_ids)
-        self.assertIn(self.private_board.id, board_ids)
+        self.b_public_board.refresh_from_db()
+        self.assertFalse(
+            self.b_public_board.pins.filter(pk=self.a_private_pin.pk).exists()
+        )
 
-    def test_valid_token_can_access_own_private_pin(self):
-        resp = self.client.get(
-            self.private_pin_url,
-            **self._auth_headers(self.owner_token),
+    def test_user_a_cannot_add_bs_private_pin_to_as_board(self):
+        self.client.login(username=self.owner_a.username, password='password')
+        board_url = reverse("board-detail", kwargs={"pk": self.a_public_board.pk})
+        pin_count_before = self.a_public_board.pins.count()
+
+        resp = self.client.patch(
+            board_url,
+            data={"pins_to_add": [self.b_private_pin.id]},
+            format='json',
         )
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json()['id'], self.private_pin.id)
+        self.a_public_board.refresh_from_db()
+        self.assertEqual(self.a_public_board.pins.count(), pin_count_before)
+        self.assertFalse(
+            self.a_public_board.pins.filter(pk=self.b_private_pin.pk).exists()
+        )
 
-    def test_other_user_token_cannot_access_others_private_pin(self):
+    def test_third_user_cannot_add_others_private_pin_to_own_board(self):
+        self.client.login(username=self.third_user.username, password='password')
+        c_board = Board.objects.create(
+            name="charlie_board", submitter=self.third_user, private=False,
+        )
+        board_url = reverse("board-detail", kwargs={"pk": c_board.pk})
+
+        resp = self.client.patch(
+            board_url,
+            data={"pins_to_add": [self.a_private_pin.id, self.b_private_pin.id]},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        c_board.refresh_from_db()
+        self.assertEqual(c_board.pins.count(), 0)
+
+    def test_user_b_cannot_remove_pin_from_as_board(self):
+        self.client.login(username=self.owner_b.username, password='password')
+        board_url = reverse("board-detail", kwargs={"pk": self.a_public_board.pk})
+
+        resp = self.client.patch(
+            board_url,
+            data={"pins_to_remove": [self.a_public_pin.id]},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.a_public_board.refresh_from_db()
+        self.assertTrue(
+            self.a_public_board.pins.filter(pk=self.a_public_pin.pk).exists()
+        )
+
+    def test_third_user_cannot_remove_pin_from_others_board(self):
+        self.client.login(username=self.third_user.username, password='password')
+        board_url = reverse("board-detail", kwargs={"pk": self.b_public_board.pk})
+
+        resp = self.client.patch(
+            board_url,
+            data={"pins_to_remove": [self.b_public_pin.id]},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_user_b_cannot_rename_as_public_board(self):
+        self.client.login(username=self.owner_b.username, password='password')
+        board_url = reverse("board-detail", kwargs={"pk": self.a_public_board.pk})
+
+        resp = self.client.patch(
+            board_url,
+            data={"name": "stolen_board_name"},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.a_public_board.refresh_from_db()
+        self.assertNotEqual(self.a_public_board.name, "stolen_board_name")
+
+    def test_user_b_cannot_change_as_board_privacy(self):
+        self.client.login(username=self.owner_b.username, password='password')
+        board_url = reverse("board-detail", kwargs={"pk": self.a_public_board.pk})
+
+        resp = self.client.patch(
+            board_url,
+            data={"private": True},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.a_public_board.refresh_from_db()
+        self.assertFalse(self.a_public_board.private)
+
+    def test_user_b_cannot_delete_as_public_board(self):
+        self.client.login(username=self.owner_b.username, password='password')
+        board_url = reverse("board-detail", kwargs={"pk": self.a_public_board.pk})
+
+        resp = self.client.delete(board_url)
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(Board.objects.filter(pk=self.a_public_board.pk).exists())
+
+    def test_anonymous_cannot_modify_any_board(self):
+        board_url = reverse("board-detail", kwargs={"pk": self.a_public_board.pk})
+
+        resp = self.client.patch(
+            board_url,
+            data={"name": "hacked_by_anonymous"},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 401)
+
+        resp = self.client.delete(board_url)
+        self.assertEqual(resp.status_code, 401)
+
+    def test_anonymous_cannot_see_private_pin_image_thumbnail(self):
         resp = self.client.get(
-            self.private_pin_url,
-            **self._auth_headers(self.other_token),
+            reverse("pin-detail", kwargs={"pk": self.a_private_pin.id})
         )
         self.assertEqual(resp.status_code, 404)
 
-    def test_invalid_token_gets_401(self):
+    def test_third_user_cannot_see_private_pin_image_thumbnail(self):
+        self.client.login(username=self.third_user.username, password='password')
         resp = self.client.get(
-            self.boards_list_url,
-            HTTP_AUTHORIZATION="Token invalidtoken12345",
+            reverse("pin-detail", kwargs={"pk": self.a_private_pin.id})
         )
-        self.assertEqual(resp.status_code, 401)
+        self.assertEqual(resp.status_code, 404)
 
-    def test_no_token_treated_as_anonymous(self):
-        resp = self.client.get(self.boards_list_url)
-        self.assertEqual(resp.status_code, 200)
-        board_ids = [b['id'] for b in resp.json()]
-        self.assertIn(self.public_board.id, board_ids)
-        self.assertNotIn(self.private_board.id, board_ids)
-
-    def test_token_after_deletion_revokes_access(self):
-        from rest_framework.authtoken.models import Token
-
+    def test_owner_can_see_own_private_pin_image_thumbnail(self):
+        self.client.login(username=self.owner_a.username, password='password')
         resp = self.client.get(
-            self.private_board_url,
-            **self._auth_headers(self.owner_token),
+            reverse("pin-detail", kwargs={"pk": self.a_private_pin.id})
         )
         self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn('image', data)
+        self.assertIsNotNone(data['image'])
+        self.assertIn('thumbnail', data['image'])
+        self.assertIn('standard', data['image'])
+        self.assertIn('square', data['image'])
+        self.assertIsNotNone(data['image']['thumbnail'])
+        self.assertIsNotNone(data['image']['thumbnail']['image'])
 
-        Token.objects.filter(user=self.owner).delete()
-
+    def test_anonymous_can_see_public_pin_image_thumbnail(self):
         resp = self.client.get(
-            self.private_board_url,
-            HTTP_AUTHORIZATION=f"Token {self.owner_token.key}",
-        )
-        self.assertEqual(resp.status_code, 401)
-
-    def test_token_recreation_uses_new_token(self):
-        from rest_framework.authtoken.models import Token
-
-        old_token_key = self.owner_token.key
-        Token.objects.filter(user=self.owner).delete()
-        new_token = Token.objects.create(user=self.owner)
-
-        resp = self.client.get(
-            self.private_board_url,
-            HTTP_AUTHORIZATION=f"Token {old_token_key}",
-        )
-        self.assertEqual(resp.status_code, 401)
-
-        resp = self.client.get(
-            self.private_board_url,
-            **self._auth_headers(new_token),
+            reverse("pin-detail", kwargs={"pk": self.a_public_pin.id})
         )
         self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn('image', data)
+        self.assertIsNotNone(data['image'])
+        self.assertIn('thumbnail', data['image'])
+        self.assertIsNotNone(data['image']['thumbnail'])
 
-    def test_token_with_create_pin_via_api(self):
-        url = 'http://testserver.com/mocked/token-pin.png'
+    def test_third_user_can_see_public_pin_image_thumbnail(self):
+        self.client.login(username=self.third_user.username, password='password')
+        resp = self.client.get(
+            reverse("pin-detail", kwargs={"pk": self.b_public_pin.id})
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn('image', data)
+        self.assertIsNotNone(data['image'])
+        self.assertIn('thumbnail', data['image'])
+        self.assertIsNotNone(data['image']['thumbnail']['image'])
+
+    def test_board_cover_no_private_pins_for_anonymous(self):
+        board = Board.objects.create(
+            name="mixed_cover_board", submitter=self.owner_a, private=False,
+        )
+        board.pins.add(self.a_private_pin)
+        board.save()
+
+        resp = self.client.get(
+            reverse("board-detail", kwargs={"pk": board.pk})
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNone(resp.json()['cover'])
+
+    def test_board_cover_no_private_pins_for_third_user(self):
+        board = Board.objects.create(
+            name="mixed_cover_board2", submitter=self.owner_a, private=False,
+        )
+        board.pins.add(self.a_private_pin)
+        board.save()
+
+        self.client.login(username=self.third_user.username, password='password')
+        resp = self.client.get(
+            reverse("board-detail", kwargs={"pk": board.pk})
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNone(resp.json()['cover'])
+
+    def test_board_cover_includes_private_pins_for_owner(self):
+        board = Board.objects.create(
+            name="mixed_cover_board3", submitter=self.owner_a, private=False,
+        )
+        board.pins.add(self.a_private_pin)
+        board.save()
+
+        self.client.login(username=self.owner_a.username, password='password')
+        resp = self.client.get(
+            reverse("board-detail", kwargs={"pk": board.pk})
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNotNone(resp.json()['cover'])
+        self.assertEqual(resp.json()['cover']['id'], self.a_private_pin.id)
+
+    def test_board_total_pins_excludes_private_for_anonymous(self):
+        board = Board.objects.create(
+            name="mixed_count_board", submitter=self.owner_a, private=False,
+        )
+        board.pins.add(self.a_public_pin, self.a_private_pin)
+        board.save()
+
+        resp = self.client.get(
+            reverse("board-detail", kwargs={"pk": board.pk})
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['total_pins'], 1)
+
+    def test_board_total_pins_excludes_private_for_third_user(self):
+        board = Board.objects.create(
+            name="mixed_count_board2", submitter=self.owner_a, private=False,
+        )
+        board.pins.add(self.a_public_pin, self.a_private_pin, self.b_public_pin)
+        board.save()
+
+        self.client.login(username=self.third_user.username, password='password')
+        resp = self.client.get(
+            reverse("board-detail", kwargs={"pk": board.pk})
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['total_pins'], 2)
+
+    def test_user_b_cannot_edit_as_public_pin_description(self):
+        self.client.login(username=self.owner_b.username, password='password')
+        pin_url = reverse("pin-detail", kwargs={"pk": self.a_public_pin.pk})
+
+        resp = self.client.patch(
+            pin_url,
+            data={"description": "malicious edit"},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.a_public_pin.refresh_from_db()
+        self.assertNotEqual(self.a_public_pin.description, "malicious edit")
+
+    def test_user_b_cannot_delete_as_public_pin(self):
+        self.client.login(username=self.owner_b.username, password='password')
+        pin_url = reverse("pin-detail", kwargs={"pk": self.a_public_pin.pk})
+
+        resp = self.client.delete(pin_url)
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(Pin.objects.filter(pk=self.a_public_pin.pk).exists())
+
+    def test_anonymous_cannot_create_pin(self):
+        url = 'http://testserver.com/mocked/anon-pin.png'
         with mock.patch('requests.get', mock_requests_get):
             resp = self.client.post(
-                self.pins_list_url,
-                data={
-                    'url': url,
-                    'private': True,
-                    'description': 'Created via token',
-                },
+                reverse("pin-list"),
+                data={'url': url, 'private': False, 'description': 'test'},
                 format='json',
-                **self._auth_headers(self.owner_token),
             )
-        self.assertEqual(resp.status_code, 201)
-        self.assertTrue(Pin.objects.filter(url=url, private=True).exists())
+        self.assertEqual(resp.status_code, 401)
 
-    def test_token_cannot_create_pin_for_other_user(self):
+    def test_anonymous_cannot_access_create_board_endpoint(self):
+        resp = self.client.post(
+            reverse("board-list"),
+            data={'name': 'hacked_board', 'private': False},
+            format='json',
+        )
+        self.assertIn(resp.status_code, [401, 405])
+
+    def test_user_a_cannot_access_bs_private_board_via_direct_id(self):
+        self.client.login(username=self.owner_a.username, password='password')
+        board_url = reverse("board-detail", kwargs={"pk": self.b_private_board.pk})
+
+        resp = self.client.get(board_url)
+        self.assertEqual(resp.status_code, 404)
+
+    def test_third_user_cannot_access_bs_private_board_via_direct_id(self):
+        self.client.login(username=self.third_user.username, password='password')
+        board_url = reverse("board-detail", kwargs={"pk": self.b_private_board.pk})
+
+        resp = self.client.get(board_url)
+        self.assertEqual(resp.status_code, 404)
+
+    def test_user_a_cannot_view_bs_private_pin_via_direct_id(self):
+        self.client.login(username=self.owner_a.username, password='password')
+        pin_url = reverse("pin-detail", kwargs={"pk": self.b_private_pin.pk})
+
+        resp = self.client.get(pin_url)
+        self.assertEqual(resp.status_code, 404)
+
+    def test_add_multiple_mixed_pins_to_board_filters_private_others(self):
+        self.client.login(username=self.owner_a.username, password='password')
+        board = Board.objects.create(
+            name="test_mixed_board", submitter=self.owner_a, private=False,
+        )
+        board_url = reverse("board-detail", kwargs={"pk": board.pk})
+
+        resp = self.client.patch(
+            board_url,
+            data={
+                "pins_to_add": [
+                    self.a_public_pin.id,
+                    self.a_private_pin.id,
+                    self.b_public_pin.id,
+                    self.b_private_pin.id,
+                ]
+            },
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        board.refresh_from_db()
+        pin_ids = set(board.pins.values_list('id', flat=True))
+        self.assertIn(self.a_public_pin.id, pin_ids)
+        self.assertIn(self.a_private_pin.id, pin_ids)
+        self.assertIn(self.b_public_pin.id, pin_ids)
+        self.assertNotIn(self.b_private_pin.id, pin_ids)
+
+    def test_owner_can_toggle_own_board_privacy(self):
+        self.client.login(username=self.owner_a.username, password='password')
+        board_url = reverse("board-detail", kwargs={"pk": self.a_public_board.pk})
+
+        resp = self.client.patch(
+            board_url,
+            data={"private": True},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.a_public_board.refresh_from_db()
+        self.assertTrue(self.a_public_board.private)
+
+        self.client.logout()
+        resp = self.client.get(board_url)
+        self.assertEqual(resp.status_code, 404)
+
+    def test_different_users_can_have_same_board_name(self):
+        board_b = Board.objects.create(
+            name="a_public_board", submitter=self.owner_b, private=False,
+        )
+        self.assertTrue(
+            Board.objects.filter(
+                submitter=self.owner_b, name="a_public_board"
+            ).exists()
+        )
+        self.assertEqual(
+            Board.objects.filter(name="a_public_board").count(), 2
+        )
+
+    def test_owner_can_toggle_own_pin_privacy(self):
+        self.client.login(username=self.owner_a.username, password='password')
+        pin_url = reverse("pin-detail", kwargs={"pk": self.a_public_pin.pk})
+
+        resp = self.client.patch(
+            pin_url,
+            data={"private": True},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.a_public_pin.refresh_from_db()
+        self.assertTrue(self.a_public_pin.private)
+
+        self.client.logout()
+        resp = self.client.get(pin_url)
+        self.assertEqual(resp.status_code, 404)
+
+    def test_user_b_cannot_toggle_as_pin_privacy(self):
+        self.client.login(username=self.owner_b.username, password='password')
+        pin_url = reverse("pin-detail", kwargs={"pk": self.a_public_pin.pk})
+
+        resp = self.client.patch(
+            pin_url,
+            data={"private": True},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.a_public_pin.refresh_from_db()
+        self.assertFalse(self.a_public_pin.private)
+
+    def test_board_pins_list_only_visible_pins_for_non_owner(self):
+        self.client.login(username=self.third_user.username, password='password')
+        board = Board.objects.create(
+            name="visibility_test_board",
+            submitter=self.owner_a,
+            private=False,
+        )
+        board.pins.add(self.a_public_pin, self.a_private_pin, self.b_public_pin)
+        board.save()
+
         resp = self.client.get(
-            reverse("pin-list"),
-            **self._auth_headers(self.other_token),
+            reverse("board-detail", kwargs={"pk": board.pk})
         )
-        results = resp.json()['results']
-        for pin in results:
-            if pin['private']:
-                self.assertNotEqual(pin['submitter']['username'], self.owner.username)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['total_pins'], 2)
 
-    def test_bulk_token_reset_revokes_all_access(self):
-        from rest_framework.authtoken.models import Token
-        from django.core.management import call_command
+    def test_owner_can_remove_pins_from_own_board(self):
+        self.client.login(username=self.owner_b.username, password='password')
+        self.b_public_board.pins.add(self.b_public_pin)
 
-        resp1 = self.client.get(
-            self.private_board_url,
-            **self._auth_headers(self.owner_token),
+        resp = self.client.patch(
+            reverse("board-detail", kwargs={"pk": self.b_public_board.pk}),
+            data={"pins_to_remove": [self.b_public_pin.id]},
+            format='json',
         )
-        resp2 = self.client.get(
-            self.boards_list_url,
-            **self._auth_headers(self.other_token),
+        self.assertEqual(resp.status_code, 200)
+        self.b_public_board.refresh_from_db()
+        self.assertEqual(self.b_public_board.pins.count(), 0)
+
+    def test_anonymous_can_list_all_public_boards(self):
+        resp = self.client.get(reverse("board-list"))
+        self.assertEqual(resp.status_code, 200)
+        board_names = [b['name'] for b in resp.json()]
+        self.assertIn("a_public_board", board_names)
+        self.assertIn("b_public_board", board_names)
+        self.assertNotIn("a_private_board", board_names)
+        self.assertNotIn("b_private_board", board_names)
+
+    def test_three_user_permission_matrix_on_pins(self):
+        self.client.login(username=self.third_user.username, password='password')
+        resp = self.client.get(reverse("pin-list"))
+        results = {p['id']: p for p in resp.json()['results']}
+
+        self.assertIn(self.a_public_pin.id, results)
+        self.assertIn(self.b_public_pin.id, results)
+        self.assertNotIn(self.a_private_pin.id, results)
+        self.assertNotIn(self.b_private_pin.id, results)
+
+    def test_user_a_sees_own_pins_in_board_detail(self):
+        self.client.login(username=self.owner_a.username, password='password')
+        resp = self.client.get(
+            reverse("board-detail", kwargs={"pk": self.a_public_board.pk})
         )
-        self.assertEqual(resp1.status_code, 200)
-        self.assertEqual(resp2.status_code, 200)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['total_pins'], 2)
 
-        call_command('users_reset_tokens')
+    def test_private_pin_not_in_search_results_for_anonymous(self):
+        self.a_private_pin.tags.add("test_search_tag")
+        self.a_public_pin.tags.add("test_search_tag")
 
-        resp1 = self.client.get(
-            self.private_board_url,
-            HTTP_AUTHORIZATION=f"Token {self.owner_token.key}",
+        resp = self.client.get(f"{reverse('pin-list')}?search=test_search_tag")
+        self.assertEqual(resp.status_code, 200)
+        pin_ids = [p['id'] for p in resp.json()['results']]
+        self.assertIn(self.a_public_pin.id, pin_ids)
+        self.assertNotIn(self.a_private_pin.id, pin_ids)
+
+    def test_user_b_cannot_transfer_pin_ownership(self):
+        self.client.login(username=self.owner_b.username, password='password')
+        pin_url = reverse("pin-detail", kwargs={"pk": self.a_public_pin.pk})
+
+        resp = self.client.patch(
+            pin_url,
+            data={"submitter": self.owner_b.id},
+            format='json',
         )
-        resp2 = self.client.get(
-            self.boards_list_url,
-            HTTP_AUTHORIZATION=f"Token {self.other_token.key}",
+        self.assertEqual(resp.status_code, 403)
+        self.a_public_pin.refresh_from_db()
+        self.assertEqual(self.a_public_pin.submitter.id, self.owner_a.id)
+
+    def test_user_a_cannot_rename_bs_private_board_via_forged_request(self):
+        self.client.login(username=self.owner_a.username, password='password')
+        resp = self.client.patch(
+            reverse("board-detail", kwargs={"pk": self.b_private_board.pk}),
+            data={"name": "hacked_name"},
+            format='json',
         )
-        self.assertEqual(resp1.status_code, 401)
-        self.assertEqual(resp2.status_code, 401)
-
-    def test_token_revocation_race_condition(self):
-        """模拟 token 撤销时的竞态条件 - 并发请求"""
-        from rest_framework.authtoken.models import Token
-        import threading
-        import time
-
-        results = {}
-
-        def make_request(user_token, request_id):
-            time.sleep(0.01)
-            try:
-                resp = self.client.get(
-                    self.private_board_url,
-                    HTTP_AUTHORIZATION=f"Token {user_token.key}",
-                )
-                results[request_id] = resp.status_code
-            except Exception as e:
-                results[request_id] = 500
-
-        threads = []
-        for i in range(10):
-            t = threading.Thread(target=make_request, args=(self.owner_token, i))
-            threads.append(t)
-
-        for t in threads:
-            t.start()
-
-        Token.objects.filter(user=self.owner).delete()
-
-        for t in threads:
-            t.join()
-
-        self.assertEqual(len(results), 10)
-        valid_results = [r for r in results.values() if isinstance(r, int)]
-        for status in valid_results:
-            self.assertIn(status, [200, 401, 404, 500])
-
-        if 200 in valid_results and 401 in valid_results:
-            pass
+        self.assertEqual(resp.status_code, 404)
+        self.b_private_board.refresh_from_db()
+        self.assertEqual(self.b_private_board.name, "b_private_board")
 
 
 class BoardDeletionReferenceTests(APITestCase):
