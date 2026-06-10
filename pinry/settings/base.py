@@ -20,7 +20,7 @@ INSTALLED_APPS = [
     'taggit',
     'compressor',
     'django_images',
-    'core',
+    'core.apps.CoreConfig',
     'users',
     'pinry_plugins.apps.PinryPluginsConfig',
 ]

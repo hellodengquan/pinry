@@ -9,6 +9,7 @@ from core.models import Pin
 from django_images.models import Thumbnail
 from users.serializers import UserSerializer
 from users.models import User
+from pinry_plugins.events import event_context
 
 
 def filter_private_pin(request, query):
@@ -124,31 +125,33 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
             )
 
         submitter = self.context['request'].user
-        if 'url' in validated_data and validated_data['url']:
-            url = validated_data['url']
-            image = Image.objects.create_for_url(
-                url,
-                validated_data.get('referer', url),
-            )
-            if not image:
-                raise ValidationError({"url": "invalid image content"})
-        else:
-            image = validated_data.pop("image_by_id")
-        tags = validated_data.pop('tag_list', [])
-        pin = Pin.objects.create(submitter=submitter, image=image, **validated_data)
-        if tags:
-            pin.tags.set(*tags)
+        with event_context(request=self.context['request'], user=submitter, source="serializer"):
+            if 'url' in validated_data and validated_data['url']:
+                url = validated_data['url']
+                image = Image.objects.create_for_url(
+                    url,
+                    validated_data.get('referer', url),
+                )
+                if not image:
+                    raise ValidationError({"url": "invalid image content"})
+            else:
+                image = validated_data.pop("image_by_id")
+            tags = validated_data.pop('tag_list', [])
+            pin = Pin.objects.create(submitter=submitter, image=image, **validated_data)
+            if tags:
+                pin.tags.set(*tags)
         return pin
 
     def update(self, instance, validated_data):
-        tags = validated_data.pop('tag_list', None)
-        if tags:
-            instance.tags.set(*tags)
-        else:
-            instance.tags.set()
-        # change for image-id or image is not allowed
-        validated_data.pop('image_by_id', None)
-        return super(PinSerializer, self).update(instance, validated_data)
+        submitter = self.context['request'].user
+        with event_context(request=self.context['request'], user=submitter, source="serializer"):
+            tags = validated_data.pop('tag_list', None)
+            if tags:
+                instance.tags.set(*tags)
+            else:
+                instance.tags.set()
+            validated_data.pop('image_by_id', None)
+            return super(PinSerializer, self).update(instance, validated_data)
 
 
 class PinIdListField(serializers.ListField):
@@ -232,40 +235,43 @@ class BoardSerializer(serializers.HyperlinkedModelSerializer):
         return valid_pins
 
     def update(self, instance: Board, validated_data):
-        pins_to_add = validated_data.pop("pins_to_add", [])
-        pins_to_remove = validated_data.pop("pins_to_remove", [])
-        board = Board.objects.filter(
-            submitter=instance.submitter,
-            name=validated_data.get('name', None)
-        ).first()
-        if board and board.id != instance.id:
-            raise ValidationError(
-                detail={'name': "Board with this name already exists"}
-            )
-        instance = super(BoardSerializer, self).update(instance, validated_data)
-        changed = False
-        if pins_to_add:
-            changed = True
-            for pin in self._get_list(pins_to_add, instance.submitter):
-                instance.pins.add(pin)
-        if pins_to_remove:
-            changed = True
-            for pin in self._get_list(pins_to_remove, instance.submitter):
-                instance.pins.remove(pin)
-        if changed:
-            instance.save()
-        return instance
+        user = self.context['request'].user
+        with event_context(request=self.context['request'], user=user, source="serializer"):
+            pins_to_add = validated_data.pop("pins_to_add", [])
+            pins_to_remove = validated_data.pop("pins_to_remove", [])
+            board = Board.objects.filter(
+                submitter=instance.submitter,
+                name=validated_data.get('name', None)
+            ).first()
+            if board and board.id != instance.id:
+                raise ValidationError(
+                    detail={'name': "Board with this name already exists"}
+                )
+            instance = super(BoardSerializer, self).update(instance, validated_data)
+            changed = False
+            if pins_to_add:
+                changed = True
+                for pin in self._get_list(pins_to_add, instance.submitter):
+                    instance.pins.add(pin)
+            if pins_to_remove:
+                changed = True
+                for pin in self._get_list(pins_to_remove, instance.submitter):
+                    instance.pins.remove(pin)
+            if changed:
+                instance.save()
+            return instance
 
     def create(self, validated_data):
         validated_data.pop('pins_to_remove', None)
         validated_data.pop('pins_to_add', None)
         user = self.context['request'].user
-        if Board.objects.filter(name=validated_data['name'], submitter=user).exists():
-            raise ValidationError(
-                detail={"name": "board with this name already exists."}
-            )
-        validated_data['submitter'] = user
-        return super(BoardSerializer, self).create(validated_data)
+        with event_context(request=self.context['request'], user=user, source="serializer"):
+            if Board.objects.filter(name=validated_data['name'], submitter=user).exists():
+                raise ValidationError(
+                    detail={"name": "board with this name already exists."}
+                )
+            validated_data['submitter'] = user
+            return super(BoardSerializer, self).create(validated_data)
 
 
 class TagAutoCompleteSerializer(serializers.ModelSerializer):
