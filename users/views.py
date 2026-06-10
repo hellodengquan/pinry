@@ -4,17 +4,45 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
-from django.http import HttpResponseRedirect, HttpResponseBadRequest, HttpResponse
+from django.http import HttpResponseRedirect, HttpResponse, JsonResponse
 from django.urls import reverse
 from django.utils.functional import lazy
+from django.utils.translation import gettext_lazy as _
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework import mixins, routers
+from rest_framework import mixins, routers, status
 from rest_framework.permissions import BasePermission
 from rest_framework.renderers import JSONRenderer
 from rest_framework.viewsets import GenericViewSet
 
+from core.exceptions import ErrorCode, format_error_response, truncate_detail
 from core.serializers import UserSerializer
 from users.models import User
+
+
+def _error_response(code, message=None, detail=None, status_code=None):
+    if status_code is None:
+        from core.exceptions import get_http_status_from_error_code
+        status_code = get_http_status_from_error_code(code)
+
+    error_data = format_error_response(
+        code=code,
+        message=message,
+        detail=detail,
+    )
+
+    if isinstance(detail, dict):
+        for key, value in detail.items():
+            if key not in error_data:
+                if isinstance(value, list):
+                    error_data[key] = value[0] if value else ""
+                else:
+                    error_data[key] = value
+    elif isinstance(detail, str):
+        error_data["non_field_errors"] = detail
+
+    error_data["detail"] = truncate_detail(error_data["detail"])
+
+    return JsonResponse(error_data, status=status_code)
 
 
 def reverse_lazy(name=None, *args):
@@ -65,24 +93,40 @@ def login_user(request):
     try:
         data = json.loads(request.body)
     except json.JSONDecodeError:
-        return HttpResponseBadRequest()
+        return _error_response(
+            code=ErrorCode.PARSE_ERROR,
+            message=_("Invalid JSON format"),
+            detail={"non_field_errors": _("Invalid JSON format")},
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    errors = {}
     if 'username' not in data:
-        return HttpResponseBadRequest(
-            json.dumps({"username": "this field is required"})
-        )
+        errors["username"] = _("This field is required.")
     if 'password' not in data:
-        return HttpResponseBadRequest(
-            json.dumps({"password": "this field is required"})
+        errors["password"] = _("This field is required.")
+
+    if errors:
+        return _error_response(
+            code=ErrorCode.VALIDATION_ERROR,
+            message=_("Validation error"),
+            detail=errors,
+            status_code=status.HTTP_400_BAD_REQUEST,
         )
+
     user = authenticate(
         request,
         username=data['username'],
         password=data['password']
     )
     if not user:
-        return HttpResponseBadRequest(
-            json.dumps({"password": "username and password doesn't match"})
+        return _error_response(
+            code=ErrorCode.AUTHENTICATION_FAILED,
+            message=_("Username and password doesn't match."),
+            detail={"password": _("Username and password doesn't match.")},
+            status_code=status.HTTP_400_BAD_REQUEST,
         )
+
     login(request, user)
     data = UserSerializer(
         user,

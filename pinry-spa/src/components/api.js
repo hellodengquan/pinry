@@ -3,6 +3,39 @@ import storage from './utils/storage';
 
 const API_PREFIX = '/api/v2/';
 
+function getFieldErrors(errorData) {
+  if (!errorData) return {};
+  const fieldErrors = {};
+  const skipKeys = ['code', 'message', 'detail'];
+  Object.entries(errorData).forEach(([key, value]) => {
+    if (!skipKeys.includes(key)) {
+      if (Array.isArray(value)) {
+        fieldErrors[key] = value[0] || '';
+      } else {
+        fieldErrors[key] = value;
+      }
+    }
+  });
+  return fieldErrors;
+}
+
+function getErrorMessage(errorData) {
+  if (!errorData) return '';
+  if (errorData.message) return errorData.message;
+  if (errorData.detail && typeof errorData.detail === 'string') return errorData.detail;
+  return '';
+}
+
+function getErrorCode(errorData) {
+  if (!errorData) return null;
+  return errorData.code || null;
+}
+
+function getErrorDetail(errorData) {
+  if (!errorData) return null;
+  return errorData.detail || null;
+}
+
 const Board = {
   create(name, private_ = false) {
     const url = `${API_PREFIX}boards/`;
@@ -287,4 +320,8 @@ export default {
   fetchPins,
   fetchBoardForUser,
   User,
+  getFieldErrors,
+  getErrorMessage,
+  getErrorCode,
+  getErrorDetail,
 };
