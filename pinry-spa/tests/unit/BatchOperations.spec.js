@@ -47,21 +47,27 @@ describe('BatchOperations - 逐项结果多语言展示', () => {
   describe('getLocalizedMessage - 基本翻译逻辑', () => {
     it('根据 code 查找 i18n 翻译并返回 (英文)', () => {
       const wrapper = createWrapper({ locale: 'en' });
-      const item = { pin_id: 1, success: true, code: 'success_move', message: 'Moved successfully' };
+      const item = {
+        pin_id: 1, success: true, code: 'success_move', message: 'Moved successfully',
+      };
       const result = wrapper.vm.getLocalizedMessage(item);
       expect(result).toBe('Moved successfully');
     });
 
     it('根据 code 查找 i18n 翻译并返回 (中文)', () => {
       const wrapper = createWrapper({ locale: 'zh' });
-      const item = { pin_id: 1, success: true, code: 'success_move', message: 'Moved successfully' };
+      const item = {
+        pin_id: 1, success: true, code: 'success_move', message: 'Moved successfully',
+      };
       const result = wrapper.vm.getLocalizedMessage(item);
       expect(result).toBe('移动成功');
     });
 
     it('根据 code 查找 i18n 翻译并返回 (法文)', () => {
       const wrapper = createWrapper({ locale: 'fr' });
-      const item = { pin_id: 1, success: true, code: 'success_copy', message: 'Copied successfully' };
+      const item = {
+        pin_id: 1, success: true, code: 'success_copy', message: 'Copied successfully',
+      };
       const result = wrapper.vm.getLocalizedMessage(item);
       expect(result).toBe('Copie réussie');
     });
@@ -88,13 +94,17 @@ describe('BatchOperations - 逐项结果多语言展示', () => {
     codeExpectations.forEach(({ code, en, zh }) => {
       it(`code="${code}" 在英文环境下返回 "${en}"`, () => {
         const wrapper = createWrapper({ locale: 'en' });
-        const result = wrapper.vm.getLocalizedMessage({ pin_id: 1, success: false, code, message: en });
+        const result = wrapper.vm.getLocalizedMessage({
+          pin_id: 1, success: false, code, message: en,
+        });
         expect(result).toBe(en);
       });
 
       it(`code="${code}" 在中文环境下返回 "${zh}"`, () => {
         const wrapper = createWrapper({ locale: 'zh' });
-        const result = wrapper.vm.getLocalizedMessage({ pin_id: 1, success: false, code, message: en });
+        const result = wrapper.vm.getLocalizedMessage({
+          pin_id: 1, success: false, code, message: en,
+        });
         expect(result).toBe(zh);
       });
     });
@@ -115,7 +125,9 @@ describe('BatchOperations - 逐项结果多语言展示', () => {
 
     it('code 为空字符串时，回退到 item.message', () => {
       const wrapper = createWrapper({ locale: 'en' });
-      const item = { pin_id: 1, success: false, code: '', message: 'Raw message' };
+      const item = {
+        pin_id: 1, success: false, code: '', message: 'Raw message',
+      };
       const result = wrapper.vm.getLocalizedMessage(item);
       expect(result).toBe('Raw message');
     });
@@ -150,19 +162,25 @@ describe('BatchOperations - 逐项结果多语言展示', () => {
   describe('getLocalizedMessage - 成功项翻译', () => {
     it('成功删除 (success_delete) 在中文环境显示中文', () => {
       const wrapper = createWrapper({ locale: 'zh' });
-      const item = { pin_id: 1, success: true, code: 'success_delete', message: 'Deleted successfully' };
+      const item = {
+        pin_id: 1, success: true, code: 'success_delete', message: 'Deleted successfully',
+      };
       expect(wrapper.vm.getLocalizedMessage(item)).toBe('删除成功');
     });
 
     it('隐私设为公开 (success_privacy_public) 在中文环境显示中文', () => {
       const wrapper = createWrapper({ locale: 'zh' });
-      const item = { pin_id: 1, success: true, code: 'success_privacy_public', message: 'Privacy set to public' };
+      const item = {
+        pin_id: 1, success: true, code: 'success_privacy_public', message: 'Privacy set to public',
+      };
       expect(wrapper.vm.getLocalizedMessage(item)).toBe('已设为公开');
     });
 
     it('隐私设为私有 (success_privacy_private) 在法文环境显示法文', () => {
       const wrapper = createWrapper({ locale: 'fr' });
-      const item = { pin_id: 1, success: true, code: 'success_privacy_private', message: 'Privacy set to private' };
+      const item = {
+        pin_id: 1, success: true, code: 'success_privacy_private', message: 'Privacy set to private',
+      };
       expect(wrapper.vm.getLocalizedMessage(item)).toBe('Défini en privé');
     });
   });

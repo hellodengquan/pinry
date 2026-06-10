@@ -251,7 +251,7 @@ export default {
       return this.blocks.filter(b => this.selectedIdsMap[b.id]);
     },
     selectedOwnedPins() {
-      const username = this.editorMeta.user.meta.username;
+      const { username } = this.editorMeta.user.meta;
       return this.selectedPins.filter(p => p.author === username);
     },
     selectablePins() {
@@ -427,7 +427,7 @@ export default {
     toggleSelectAll(value) {
       if (value) {
         const newMap = {};
-        this.selectablePins.forEach(p => { newMap[p.id] = true; });
+        this.selectablePins.forEach((p) => { newMap[p.id] = true; });
         this.selectedIdsMap = newMap;
       } else {
         this.selectedIdsMap = {};
@@ -444,7 +444,7 @@ export default {
           currentBoardId: this.pinFilters.boardFilter ? Number(this.pinFilters.boardFilter) : null,
         },
         {
-          'batch-move-succeed': (succeededIds) => this.onBatchMoveSucceed(succeededIds),
+          'batch-move-succeed': succeededIds => this.onBatchMoveSucceed(succeededIds),
         },
       );
     },
@@ -476,7 +476,7 @@ export default {
           currentBoardId: null,
         },
         {
-          'batch-delete-succeed': (succeededIds) => this.onBatchDeleteSucceed(succeededIds),
+          'batch-delete-succeed': succeededIds => this.onBatchDeleteSucceed(succeededIds),
         },
       );
     },
@@ -500,14 +500,14 @@ export default {
     },
     onBatchMoveSucceed(succeededIds) {
       if (this.pinFilters.boardFilter) {
-        succeededIds.forEach(id => {
+        succeededIds.forEach((id) => {
           this.$delete(this.selectedIdsMap, id);
         });
         this.reset();
       }
     },
     onBatchDeleteSucceed(succeededIds) {
-      succeededIds.forEach(id => {
+      succeededIds.forEach((id) => {
         this.$delete(this.selectedIdsMap, id);
       });
       this.reset();

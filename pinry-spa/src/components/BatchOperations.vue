@@ -203,9 +203,9 @@ export default {
       API.Board.fetchFullList(this.username).then(
         (resp) => {
           this.boardOptions = resp.data.map(
-            (board) => ({ name: board.name, value: board.id }),
+            board => ({ name: board.name, value: board.id }),
           ).filter(
-            (board) => board.value !== this.currentBoardId || this.operation !== 'move',
+            board => board.value !== this.currentBoardId || this.operation !== 'move',
           );
         },
         () => {
@@ -249,6 +249,8 @@ export default {
           case 'privacy':
             response = await API.BatchOperation.updatePrivacy(pinIds, this.privateFlag);
             break;
+          default:
+            throw new Error(`Unknown batch operation: ${this.operation}`);
         }
         this.operationResult = response.data;
         this.emitSucceedEvents();
@@ -292,6 +294,8 @@ export default {
           break;
         case 'privacy':
           this.$emit('batch-privacy-succeed', succeededIds);
+          break;
+        default:
           break;
       }
     },
