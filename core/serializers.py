@@ -216,7 +216,9 @@ class BoardSerializer(serializers.HyperlinkedModelSerializer):
         return query.count()
 
     def get_cover(self, instance: Board) -> dict or None:
-        pin = instance.pins.first()
+        request = self.context['request']
+        pins = filter_private_pin(request, instance.pins.all())
+        pin = pins.first()
         if pin is None:
             return None
         return PinSerializer(pin, context=self.context).data
