@@ -96,15 +96,22 @@ class BatchTagViewSet(viewsets.ViewSet):
         serializer = api.BatchTagAddSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        pin_ids = serializer.validated_data["pin_ids"]
+        pin_ids = serializer.validated_data.get("pin_ids")
+        pin_tag_names = serializer.validated_data.get("pin_tag_names")
         tags = serializer.validated_data["tags"]
         dry_run = serializer.validated_data.get("dry_run", False)
 
         if dry_run:
-            preview = preview_batch_add(request.user, pin_ids, tags)
+            preview = preview_batch_add(
+                request.user, tags,
+                pin_ids=pin_ids, pin_tag_names=pin_tag_names,
+            )
             return Response(preview, status=status.HTTP_200_OK)
 
-        result = execute_batch_add(request.user, pin_ids, tags)
+        result = execute_batch_add(
+            request.user, tags,
+            pin_ids=pin_ids, pin_tag_names=pin_tag_names,
+        )
         return Response(result.to_dict(), status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["post"], url_path="remove")
@@ -112,15 +119,22 @@ class BatchTagViewSet(viewsets.ViewSet):
         serializer = api.BatchTagRemoveSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        pin_ids = serializer.validated_data["pin_ids"]
+        pin_ids = serializer.validated_data.get("pin_ids")
+        pin_tag_names = serializer.validated_data.get("pin_tag_names")
         tags = serializer.validated_data["tags"]
         dry_run = serializer.validated_data.get("dry_run", False)
 
         if dry_run:
-            preview = preview_batch_remove(request.user, pin_ids, tags)
+            preview = preview_batch_remove(
+                request.user, tags,
+                pin_ids=pin_ids, pin_tag_names=pin_tag_names,
+            )
             return Response(preview, status=status.HTTP_200_OK)
 
-        result = execute_batch_remove(request.user, pin_ids, tags)
+        result = execute_batch_remove(
+            request.user, tags,
+            pin_ids=pin_ids, pin_tag_names=pin_tag_names,
+        )
         return Response(result.to_dict(), status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["post"], url_path="merge")
@@ -149,14 +163,16 @@ class BatchTagViewSet(viewsets.ViewSet):
         if operation == "add":
             preview = preview_batch_add(
                 request.user,
-                serializer.validated_data["pin_ids"],
                 serializer.validated_data["tags"],
+                pin_ids=serializer.validated_data.get("pin_ids"),
+                pin_tag_names=serializer.validated_data.get("pin_tag_names"),
             )
         elif operation == "remove":
             preview = preview_batch_remove(
                 request.user,
-                serializer.validated_data["pin_ids"],
                 serializer.validated_data["tags"],
+                pin_ids=serializer.validated_data.get("pin_ids"),
+                pin_tag_names=serializer.validated_data.get("pin_tag_names"),
             )
         elif operation == "merge":
             preview = preview_batch_merge(

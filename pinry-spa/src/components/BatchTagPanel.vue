@@ -14,20 +14,59 @@
             <b-tab-item :label="$t('batchTagAddTab')">
               <div class="card">
                 <div class="card-content">
-                  <b-field :label="$t('batchTagPinIdsLabel')">
+                  <b-field :label="$t('batchTagSelectionMode')">
+                    <b-radio-button
+                      v-model="addSelectionMode"
+                      :native-value="'tag'"
+                      size="is-small"
+                      type="is-primary">
+                      <b-icon icon="label"></b-icon>
+                      <span>{{ $t('batchTagByTag') }}</span>
+                    </b-radio-button>
+                    <b-radio-button
+                      v-model="addSelectionMode"
+                      :native-value="'id'"
+                      size="is-small"
+                      type="is-primary">
+                      <b-icon icon="hash"></b-icon>
+                      <span>{{ $t('batchTagById') }}</span>
+                    </b-radio-button>
+                  </b-field>
+
+                  <b-field
+                    v-if="addSelectionMode === 'tag'"
+                    :label="$t('batchTagSelectPinByTag')">
+                    <b-taginput
+                      v-model="form.addPinTagNames"
+                      :data="filteredTagOptions"
+                      autocomplete
+                      ellipsis
+                      icon="label"
+                      :allow-new="false"
+                      :placeholder="$t('batchTagSelectPinByTagPlaceholder')"
+                      @typing="getFilteredTags"
+                    ></b-taginput>
+                    <p class="help">{{ $t('batchTagSelectPinByTagHelp') }}</p>
+                  </b-field>
+
+                  <b-field
+                    v-if="addSelectionMode === 'id'"
+                    :label="$t('batchTagPinIdsLabel')">
                     <b-input
                       v-model="form.pinIdsText"
                       :placeholder="$t('batchTagPinIdsPlaceholder')"
                       type="textarea"
                     ></b-input>
+                    <p class="help is-info">{{ $t('batchTagAdvancedMode') }}</p>
                   </b-field>
-                  <b-field :label="$t('batchTagTagsLabel')">
+
+                  <b-field :label="$t('batchTagAddTagsLabel')">
                     <b-taginput
                       v-model="form.tags"
                       :data="filteredTagOptions"
                       autocomplete
                       ellipsis
-                      icon="label"
+                      icon="plus"
                       :allow-new="true"
                       :placeholder="$t('batchTagTagsPlaceholder')"
                       @typing="getFilteredTags"
@@ -57,20 +96,59 @@
             <b-tab-item :label="$t('batchTagRemoveTab')">
               <div class="card">
                 <div class="card-content">
-                  <b-field :label="$t('batchTagPinIdsLabel')">
+                  <b-field :label="$t('batchTagSelectionMode')">
+                    <b-radio-button
+                      v-model="removeSelectionMode"
+                      :native-value="'tag'"
+                      size="is-small"
+                      type="is-primary">
+                      <b-icon icon="label"></b-icon>
+                      <span>{{ $t('batchTagByTag') }}</span>
+                    </b-radio-button>
+                    <b-radio-button
+                      v-model="removeSelectionMode"
+                      :native-value="'id'"
+                      size="is-small"
+                      type="is-primary">
+                      <b-icon icon="hash"></b-icon>
+                      <span>{{ $t('batchTagById') }}</span>
+                    </b-radio-button>
+                  </b-field>
+
+                  <b-field
+                    v-if="removeSelectionMode === 'tag'"
+                    :label="$t('batchTagSelectPinByTag')">
+                    <b-taginput
+                      v-model="form.removePinTagNames"
+                      :data="filteredTagOptions"
+                      autocomplete
+                      ellipsis
+                      icon="label"
+                      :allow-new="false"
+                      :placeholder="$t('batchTagSelectPinByTagPlaceholder')"
+                      @typing="getFilteredTags"
+                    ></b-taginput>
+                    <p class="help">{{ $t('batchTagSelectPinByTagHelp') }}</p>
+                  </b-field>
+
+                  <b-field
+                    v-if="removeSelectionMode === 'id'"
+                    :label="$t('batchTagPinIdsLabel')">
                     <b-input
                       v-model="form.pinIdsText"
                       :placeholder="$t('batchTagPinIdsPlaceholder')"
                       type="textarea"
                     ></b-input>
+                    <p class="help is-info">{{ $t('batchTagAdvancedMode') }}</p>
                   </b-field>
-                  <b-field :label="$t('batchTagTagsLabel')">
+
+                  <b-field :label="$t('batchTagRemoveTagsLabel')">
                     <b-taginput
                       v-model="form.tags"
                       :data="filteredTagOptions"
                       autocomplete
                       ellipsis
-                      icon="label"
+                      icon="minus"
                       :allow-new="true"
                       :placeholder="$t('batchTagTagsPlaceholder')"
                       @typing="getFilteredTags"
@@ -326,12 +404,16 @@ export default {
   data() {
     return {
       activeTab: 0,
+      addSelectionMode: 'tag',
+      removeSelectionMode: 'tag',
       user: {
         loggedIn: false,
         meta: {},
       },
       form: {
         pinIdsText: '',
+        addPinTagNames: [],
+        removePinTagNames: [],
         tags: [],
         sourceTags: [],
         targetTag: '',
@@ -343,6 +425,20 @@ export default {
       previewData: null,
       resultData: null,
     };
+  },
+  watch: {
+    activeTab() {
+      this.previewData = null;
+      this.resultData = null;
+    },
+    addSelectionMode() {
+      this.previewData = null;
+      this.resultData = null;
+    },
+    removeSelectionMode() {
+      this.previewData = null;
+      this.resultData = null;
+    },
   },
   computed: {
     hasPreview() {
@@ -397,9 +493,34 @@ export default {
           });
           return false;
         }
-      } else {
-        const pinIds = this.parsePinIds();
-        if (pinIds.length === 0 || this.form.tags.length === 0) {
+      } else if (operation === 'add') {
+        if (this.addSelectionMode === 'id') {
+          const pinIds = this.parsePinIds();
+          if (pinIds.length === 0 || this.form.tags.length === 0) {
+            this.$buefy.toast.open({
+              type: 'is-danger',
+              message: this.$t('batchTagValidationError'),
+            });
+            return false;
+          }
+        } else if (this.form.addPinTagNames.length === 0 || this.form.tags.length === 0) {
+          this.$buefy.toast.open({
+            type: 'is-danger',
+            message: this.$t('batchTagValidationError'),
+          });
+          return false;
+        }
+      } else if (operation === 'remove') {
+        if (this.removeSelectionMode === 'id') {
+          const pinIds = this.parsePinIds();
+          if (pinIds.length === 0 || this.form.tags.length === 0) {
+            this.$buefy.toast.open({
+              type: 'is-danger',
+              message: this.$t('batchTagValidationError'),
+            });
+            return false;
+          }
+        } else if (this.form.removePinTagNames.length === 0 || this.form.tags.length === 0) {
           this.$buefy.toast.open({
             type: 'is-danger',
             message: this.$t('batchTagValidationError'),
@@ -411,16 +532,18 @@ export default {
     },
     buildPayload(operation) {
       if (operation === 'add') {
-        return {
-          pin_ids: this.parsePinIds(),
-          tags: this.form.tags,
-        };
+        const base = { tags: this.form.tags };
+        if (this.addSelectionMode === 'id') {
+          return { ...base, pin_ids: this.parsePinIds() };
+        }
+        return { ...base, pin_tag_names: this.form.addPinTagNames };
       }
       if (operation === 'remove') {
-        return {
-          pin_ids: this.parsePinIds(),
-          tags: this.form.tags,
-        };
+        const base = { tags: this.form.tags };
+        if (this.removeSelectionMode === 'id') {
+          return { ...base, pin_ids: this.parsePinIds() };
+        }
+        return { ...base, pin_tag_names: this.form.removePinTagNames };
       }
       return {
         source_tags: this.form.sourceTags,

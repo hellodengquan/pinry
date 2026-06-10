@@ -76,15 +76,17 @@ def _resolve_and_filter_pins(user, pin_ids=None, tag_names=None):
     return accessible, skipped
 
 
-def preview_batch_add(user, pin_ids, tag_names):
-    accessible, skipped = _resolve_and_filter_pins(user, pin_ids=pin_ids)
+def preview_batch_add(user, tags, pin_ids=None, pin_tag_names=None):
+    accessible, skipped = _resolve_and_filter_pins(
+        user, pin_ids=pin_ids, tag_names=pin_tag_names,
+    )
 
     affected_pin_ids = list(accessible.values_list("id", flat=True))
     skipped_pin_ids = list(skipped.keys())
 
     tag_conflicts = {}
     normalized_names = {}
-    for name in tag_names:
+    for name in tags:
         norm = _normalize_tag_name(name)
         normalized_names[name] = norm
         existing = Tag.objects.filter(name=norm)
@@ -95,7 +97,7 @@ def preview_batch_add(user, pin_ids, tag_names):
                 "message": "Tag will be normalized to '{}' (case-insensitive)".format(norm),
             }
 
-    existing_tags = Tag.objects.filter(name__in=[_normalize_tag_name(n) for n in tag_names])
+    existing_tags = Tag.objects.filter(name__in=[_normalize_tag_name(n) for n in tags])
     pins_with_existing = {}
     for tag in existing_tags:
         pin_ids_with_tag = list(
@@ -106,7 +108,8 @@ def preview_batch_add(user, pin_ids, tag_names):
 
     return {
         "operation": "add",
-        "tags": tag_names,
+        "tags": tags,
+        "selection_mode": "pin_ids" if pin_ids else "tag_names",
         "normalized_tags": {k: v for k, v in normalized_names.items() if k != v},
         "tag_conflicts": tag_conflicts,
         "pins_already_having_tag": pins_with_existing,
@@ -118,14 +121,16 @@ def preview_batch_add(user, pin_ids, tag_names):
     }
 
 
-def preview_batch_remove(user, pin_ids, tag_names):
-    accessible, skipped = _resolve_and_filter_pins(user, pin_ids=pin_ids)
+def preview_batch_remove(user, tags, pin_ids=None, pin_tag_names=None):
+    accessible, skipped = _resolve_and_filter_pins(
+        user, pin_ids=pin_ids, tag_names=pin_tag_names,
+    )
 
     affected_pin_ids = list(accessible.values_list("id", flat=True))
     skipped_pin_ids = list(skipped.keys())
 
-    existing_tag_names = set(Tag.objects.filter(name__in=tag_names).values_list("name", flat=True))
-    non_existent_tags = [t for t in tag_names if t not in existing_tag_names]
+    existing_tag_names = set(Tag.objects.filter(name__in=tags).values_list("name", flat=True))
+    non_existent_tags = [t for t in tags if t not in existing_tag_names]
 
     pins_with_tags = {}
     for tag_name in existing_tag_names:
@@ -137,7 +142,8 @@ def preview_batch_remove(user, pin_ids, tag_names):
 
     return {
         "operation": "remove",
-        "tags": tag_names,
+        "tags": tags,
+        "selection_mode": "pin_ids" if pin_ids else "tag_names",
         "non_existent_tags": non_existent_tags,
         "pins_having_tag": pins_with_tags,
         "affected_count": len(affected_pin_ids),
@@ -215,9 +221,11 @@ def preview_batch_merge(user, source_tags, target_tag):
     }
 
 
-def execute_batch_add(user, pin_ids, tag_names, dry_run=False):
+def execute_batch_add(user, tags, pin_ids=None, pin_tag_names=None, dry_run=False):
     result = BatchTagResult()
-    accessible, skipped = _resolve_and_filter_pins(user, pin_ids=pin_ids)
+    accessible, skipped = _resolve_and_filter_pins(
+        user, pin_ids=pin_ids, tag_names=pin_tag_names,
+    )
 
     result.skipped_pin_ids = list(skipped.keys())
     result.skipped_reasons = {str(k): v for k, v in skipped.items()}
@@ -227,7 +235,7 @@ def execute_batch_add(user, pin_ids, tag_names, dry_run=False):
         return result
 
     normalized_tags = []
-    for name in tag_names:
+    for name in tags:
         norm = _normalize_tag_name(name)
         tag, _ = Tag.objects.get_or_create(
             defaults={"name": norm, "slug": norm},
@@ -255,9 +263,11 @@ def execute_batch_add(user, pin_ids, tag_names, dry_run=False):
     return result
 
 
-def execute_batch_remove(user, pin_ids, tag_names, dry_run=False):
+def execute_batch_remove(user, tags, pin_ids=None, pin_tag_names=None, dry_run=False):
     result = BatchTagResult()
-    accessible, skipped = _resolve_and_filter_pins(user, pin_ids=pin_ids)
+    accessible, skipped = _resolve_and_filter_pins(
+        user, pin_ids=pin_ids, tag_names=pin_tag_names,
+    )
 
     result.skipped_pin_ids = list(skipped.keys())
     result.skipped_reasons = {str(k): v for k, v in skipped.items()}
@@ -266,7 +276,7 @@ def execute_batch_remove(user, pin_ids, tag_names, dry_run=False):
         result.affected_pin_ids = list(accessible.values_list("id", flat=True))
         return result
 
-    existing_tags = Tag.objects.filter(name__in=tag_names)
+    existing_tags = Tag.objects.filter(name__in=tags)
     if not existing_tags.exists():
         result.errors.append({"error": "None of the specified tags exist"})
         return result

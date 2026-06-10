@@ -274,7 +274,12 @@ class TagNameListField(serializers.ListField):
 
 class BatchTagAddSerializer(serializers.Serializer):
     pin_ids = PinIdListField(
+        required=False,
         help_text="List of pin IDs to add tags to",
+    )
+    pin_tag_names = TagNameListField(
+        required=False,
+        help_text="List of tag names to select pins by",
     )
     tags = TagNameListField(
         help_text="List of tag names to add",
@@ -292,17 +297,35 @@ class BatchTagAddSerializer(serializers.Serializer):
 
     def validate_pin_ids(self, value):
         if not value:
-            raise ValidationError("At least one pin ID is required")
+            return value
         existing_ids = set(Pin.objects.filter(id__in=value).values_list("id", flat=True))
         invalid_ids = set(value) - existing_ids
         if invalid_ids:
             raise ValidationError("Invalid pin IDs: {}".format(sorted(invalid_ids)))
         return value
 
+    def validate(self, attrs):
+        has_pin_ids = bool(attrs.get("pin_ids"))
+        has_tag_names = bool(attrs.get("pin_tag_names"))
+        if not has_pin_ids and not has_tag_names:
+            raise ValidationError(
+                "Either pin_ids or pin_tag_names must be provided"
+            )
+        if has_pin_ids and has_tag_names:
+            raise ValidationError(
+                "pin_ids and pin_tag_names cannot be used together"
+            )
+        return attrs
+
 
 class BatchTagRemoveSerializer(serializers.Serializer):
     pin_ids = PinIdListField(
+        required=False,
         help_text="List of pin IDs to remove tags from",
+    )
+    pin_tag_names = TagNameListField(
+        required=False,
+        help_text="List of tag names to select pins by",
     )
     tags = TagNameListField(
         help_text="List of tag names to remove",
@@ -320,12 +343,25 @@ class BatchTagRemoveSerializer(serializers.Serializer):
 
     def validate_pin_ids(self, value):
         if not value:
-            raise ValidationError("At least one pin ID is required")
+            return value
         existing_ids = set(Pin.objects.filter(id__in=value).values_list("id", flat=True))
         invalid_ids = set(value) - existing_ids
         if invalid_ids:
             raise ValidationError("Invalid pin IDs: {}".format(sorted(invalid_ids)))
         return value
+
+    def validate(self, attrs):
+        has_pin_ids = bool(attrs.get("pin_ids"))
+        has_tag_names = bool(attrs.get("pin_tag_names"))
+        if not has_pin_ids and not has_tag_names:
+            raise ValidationError(
+                "Either pin_ids or pin_tag_names must be provided"
+            )
+        if has_pin_ids and has_tag_names:
+            raise ValidationError(
+                "pin_ids and pin_tag_names cannot be used together"
+            )
+        return attrs
 
 
 class BatchTagMergeSerializer(serializers.Serializer):
@@ -369,11 +405,15 @@ class BatchTagPreviewSerializer(serializers.Serializer):
     )
     pin_ids = PinIdListField(
         required=False,
-        help_text="List of pin IDs (required for add/remove operations)",
+        help_text="List of pin IDs (for add/remove operations, pin-by-id mode)",
+    )
+    pin_tag_names = TagNameListField(
+        required=False,
+        help_text="List of tag names to select pins by (for add/remove operations, tag-selection mode)",
     )
     tags = TagNameListField(
         required=False,
-        help_text="List of tag names (for add/remove operations)",
+        help_text="List of tag names (for add/remove operations, the tags to add/remove)",
     )
     source_tags = TagNameListField(
         required=False,
@@ -388,8 +428,16 @@ class BatchTagPreviewSerializer(serializers.Serializer):
     def validate(self, attrs):
         operation = attrs.get("operation")
         if operation in ("add", "remove"):
-            if not attrs.get("pin_ids"):
-                raise ValidationError("pin_ids is required for {} operation".format(operation))
+            has_pin_ids = bool(attrs.get("pin_ids"))
+            has_tag_names = bool(attrs.get("pin_tag_names"))
+            if not has_pin_ids and not has_tag_names:
+                raise ValidationError(
+                    "Either pin_ids or pin_tag_names is required for {} operation".format(operation)
+                )
+            if has_pin_ids and has_tag_names:
+                raise ValidationError(
+                    "pin_ids and pin_tag_names cannot be used together"
+                )
             if not attrs.get("tags"):
                 raise ValidationError("tags is required for {} operation".format(operation))
         elif operation == "merge":

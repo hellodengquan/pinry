@@ -633,3 +633,107 @@ class BatchTagTests(APITestCase):
         self.pin1.refresh_from_db()
         tag_names = list(self.pin1.tags.names())
         self.assertEqual(tag_names.count("new-tag"), 1)
+
+    def test_batch_add_by_tag_names(self):
+        resp = self.client.post(
+            self._batch_add_url(),
+            data={"pin_tag_names": ["python"], "tags": ["web"]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()
+        self.assertEqual(data["affected_count"], 2)
+        self.assertIn(self.pin1.id, data["affected_pin_ids"])
+        self.assertIn(self.pin2.id, data["affected_pin_ids"])
+
+        self.pin1.refresh_from_db()
+        self.pin2.refresh_from_db()
+        self.assertIn("web", list(self.pin1.tags.names()))
+        self.assertIn("web", list(self.pin2.tags.names()))
+
+    def test_batch_add_by_tag_names_dry_run(self):
+        resp = self.client.post(
+            self._batch_add_url(),
+            data={"pin_tag_names": ["python"], "tags": ["web"], "dry_run": True},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()
+        self.assertEqual(data["selection_mode"], "tag_names")
+        self.assertEqual(data["affected_count"], 2)
+
+        self.pin1.refresh_from_db()
+        self.assertNotIn("web", list(self.pin1.tags.names()))
+
+    def test_batch_add_pin_ids_and_tag_names_conflict(self):
+        resp = self.client.post(
+            self._batch_add_url(),
+            data={
+                "pin_ids": [self.pin1.id],
+                "pin_tag_names": ["python"],
+                "tags": ["web"],
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_batch_remove_by_tag_names(self):
+        resp = self.client.post(
+            self._batch_remove_url(),
+            data={"pin_tag_names": ["django"], "tags": ["python"]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()
+        self.assertEqual(data["affected_count"], 1)
+        self.assertIn(self.pin1.id, data["affected_pin_ids"])
+
+        self.pin1.refresh_from_db()
+        self.assertNotIn("python", list(self.pin1.tags.names()))
+
+    def test_batch_remove_by_tag_names_dry_run(self):
+        resp = self.client.post(
+            self._batch_remove_url(),
+            data={
+                "pin_tag_names": ["python"],
+                "tags": ["django"],
+                "dry_run": True,
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()
+        self.assertEqual(data["selection_mode"], "tag_names")
+        self.assertEqual(data["affected_count"], 2)
+
+    def test_preview_add_by_tag_names(self):
+        resp = self.client.post(
+            self._batch_preview_url(),
+            data={
+                "operation": "add",
+                "pin_tag_names": ["python", "django"],
+                "tags": ["web"],
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()
+        self.assertEqual(data["operation"], "add")
+        self.assertEqual(data["selection_mode"], "tag_names")
+        self.assertEqual(data["affected_count"], 2)
+
+    def test_preview_remove_by_tag_names(self):
+        resp = self.client.post(
+            self._batch_preview_url(),
+            data={
+                "operation": "remove",
+                "pin_tag_names": ["python"],
+                "tags": ["django"],
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()
+        self.assertEqual(data["operation"], "remove")
+        self.assertEqual(data["selection_mode"], "tag_names")
+        self.assertIn("pins_having_tag", data)
