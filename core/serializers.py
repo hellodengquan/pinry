@@ -268,6 +268,138 @@ class BoardSerializer(serializers.HyperlinkedModelSerializer):
         return super(BoardSerializer, self).create(validated_data)
 
 
+class TagNameListField(serializers.ListField):
+    child = serializers.CharField(max_length=128)
+
+
+class BatchTagAddSerializer(serializers.Serializer):
+    pin_ids = PinIdListField(
+        help_text="List of pin IDs to add tags to",
+    )
+    tags = TagNameListField(
+        help_text="List of tag names to add",
+    )
+    dry_run = serializers.BooleanField(
+        default=False,
+        write_only=True,
+        help_text="If true, only preview the result without making changes",
+    )
+
+    def validate_tags(self, value):
+        if not value:
+            raise ValidationError("At least one tag is required")
+        return value
+
+    def validate_pin_ids(self, value):
+        if not value:
+            raise ValidationError("At least one pin ID is required")
+        existing_ids = set(Pin.objects.filter(id__in=value).values_list("id", flat=True))
+        invalid_ids = set(value) - existing_ids
+        if invalid_ids:
+            raise ValidationError("Invalid pin IDs: {}".format(sorted(invalid_ids)))
+        return value
+
+
+class BatchTagRemoveSerializer(serializers.Serializer):
+    pin_ids = PinIdListField(
+        help_text="List of pin IDs to remove tags from",
+    )
+    tags = TagNameListField(
+        help_text="List of tag names to remove",
+    )
+    dry_run = serializers.BooleanField(
+        default=False,
+        write_only=True,
+        help_text="If true, only preview the result without making changes",
+    )
+
+    def validate_tags(self, value):
+        if not value:
+            raise ValidationError("At least one tag is required")
+        return value
+
+    def validate_pin_ids(self, value):
+        if not value:
+            raise ValidationError("At least one pin ID is required")
+        existing_ids = set(Pin.objects.filter(id__in=value).values_list("id", flat=True))
+        invalid_ids = set(value) - existing_ids
+        if invalid_ids:
+            raise ValidationError("Invalid pin IDs: {}".format(sorted(invalid_ids)))
+        return value
+
+
+class BatchTagMergeSerializer(serializers.Serializer):
+    source_tags = TagNameListField(
+        help_text="List of tag names to merge into the target tag",
+    )
+    target_tag = serializers.CharField(
+        max_length=128,
+        help_text="The tag name that all source tags will be merged into",
+    )
+    dry_run = serializers.BooleanField(
+        default=False,
+        write_only=True,
+        help_text="If true, only preview the result without making changes",
+    )
+
+    def validate_source_tags(self, value):
+        if not value:
+            raise ValidationError("At least one source tag is required")
+        return value
+
+    def validate(self, attrs):
+        from core.batch_tags import _normalize_tag_name
+        source_tags = attrs.get("source_tags", [])
+        target_tag = attrs.get("target_tag", "")
+        normalized_target = _normalize_tag_name(target_tag)
+        for source in source_tags:
+            if _normalize_tag_name(source) == normalized_target:
+                raise ValidationError(
+                    "Source tag '{}' is the same as target tag '{}' (case-insensitive)".format(
+                        source, target_tag
+                    )
+                )
+        return attrs
+
+
+class BatchTagPreviewSerializer(serializers.Serializer):
+    operation = serializers.ChoiceField(
+        choices=["add", "remove", "merge"],
+        help_text="The type of batch operation to preview",
+    )
+    pin_ids = PinIdListField(
+        required=False,
+        help_text="List of pin IDs (required for add/remove operations)",
+    )
+    tags = TagNameListField(
+        required=False,
+        help_text="List of tag names (for add/remove operations)",
+    )
+    source_tags = TagNameListField(
+        required=False,
+        help_text="List of source tag names (for merge operation)",
+    )
+    target_tag = serializers.CharField(
+        max_length=128,
+        required=False,
+        help_text="Target tag name (for merge operation)",
+    )
+
+    def validate(self, attrs):
+        operation = attrs.get("operation")
+        if operation in ("add", "remove"):
+            if not attrs.get("pin_ids"):
+                raise ValidationError("pin_ids is required for {} operation".format(operation))
+            if not attrs.get("tags"):
+                raise ValidationError("tags is required for {} operation".format(operation))
+        elif operation == "merge":
+            if not attrs.get("source_tags"):
+                raise ValidationError("source_tags is required for merge operation")
+            if not attrs.get("target_tag"):
+                raise ValidationError("target_tag is required for merge operation")
+        return attrs
+
+
 class TagAutoCompleteSerializer(serializers.ModelSerializer):
 
     class Meta:

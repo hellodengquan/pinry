@@ -1,12 +1,23 @@
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_page
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework import viewsets, mixins, routers
+from rest_framework import viewsets, mixins, routers, status
+from rest_framework.decorators import action
 from rest_framework.filters import SearchFilter, OrderingFilter
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 from taggit.models import Tag
 
 from core import serializers as api
+from core.batch_tags import (
+    preview_batch_add,
+    preview_batch_remove,
+    preview_batch_merge,
+    execute_batch_add,
+    execute_batch_remove,
+    execute_batch_merge,
+)
 from core.models import Image, Pin, Board
 from core.permissions import IsOwnerOrReadOnly, OwnerOnlyIfPrivate
 from core.serializers import filter_private_pin, filter_private_board
@@ -77,9 +88,95 @@ class TagAutoCompleteViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         )
 
 
+class BatchTagViewSet(viewsets.ViewSet):
+    permission_classes = [IsAuthenticated]
+
+    @action(detail=False, methods=["post"], url_path="add")
+    def batch_add(self, request):
+        serializer = api.BatchTagAddSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        pin_ids = serializer.validated_data["pin_ids"]
+        tags = serializer.validated_data["tags"]
+        dry_run = serializer.validated_data.get("dry_run", False)
+
+        if dry_run:
+            preview = preview_batch_add(request.user, pin_ids, tags)
+            return Response(preview, status=status.HTTP_200_OK)
+
+        result = execute_batch_add(request.user, pin_ids, tags)
+        return Response(result.to_dict(), status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"], url_path="remove")
+    def batch_remove(self, request):
+        serializer = api.BatchTagRemoveSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        pin_ids = serializer.validated_data["pin_ids"]
+        tags = serializer.validated_data["tags"]
+        dry_run = serializer.validated_data.get("dry_run", False)
+
+        if dry_run:
+            preview = preview_batch_remove(request.user, pin_ids, tags)
+            return Response(preview, status=status.HTTP_200_OK)
+
+        result = execute_batch_remove(request.user, pin_ids, tags)
+        return Response(result.to_dict(), status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"], url_path="merge")
+    def batch_merge(self, request):
+        serializer = api.BatchTagMergeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        source_tags = serializer.validated_data["source_tags"]
+        target_tag = serializer.validated_data["target_tag"]
+        dry_run = serializer.validated_data.get("dry_run", False)
+
+        if dry_run:
+            preview = preview_batch_merge(request.user, source_tags, target_tag)
+            return Response(preview, status=status.HTTP_200_OK)
+
+        result = execute_batch_merge(request.user, source_tags, target_tag)
+        return Response(result.to_dict(), status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"], url_path="preview")
+    def preview(self, request):
+        serializer = api.BatchTagPreviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        operation = serializer.validated_data["operation"]
+
+        if operation == "add":
+            preview = preview_batch_add(
+                request.user,
+                serializer.validated_data["pin_ids"],
+                serializer.validated_data["tags"],
+            )
+        elif operation == "remove":
+            preview = preview_batch_remove(
+                request.user,
+                serializer.validated_data["pin_ids"],
+                serializer.validated_data["tags"],
+            )
+        elif operation == "merge":
+            preview = preview_batch_merge(
+                request.user,
+                serializer.validated_data["source_tags"],
+                serializer.validated_data["target_tag"],
+            )
+        else:
+            return Response(
+                {"error": "Unknown operation: {}".format(operation)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(preview, status=status.HTTP_200_OK)
+
+
 drf_router = routers.DefaultRouter()
 drf_router.register(r'pins', PinViewSet, basename="pin")
 drf_router.register(r'images', ImageViewSet)
 drf_router.register(r'boards', BoardViewSet, basename="board")
 drf_router.register(r'tags-auto-complete', TagAutoCompleteViewSet)
 drf_router.register(r'boards-auto-complete', BoardAutoCompleteViewSet, basename="board")
+drf_router.register(r'batch-tags', BatchTagViewSet, basename="batch-tags")

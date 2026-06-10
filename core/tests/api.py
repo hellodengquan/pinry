@@ -286,3 +286,350 @@ class PinTests(APITestCase):
         uri = reverse("pin-detail", kwargs={"pk": pin.pk})
         self.client.delete(uri)
         self.assertEqual(Pin.objects.count(), 0)
+
+
+class BatchTagTests(APITestCase):
+
+    def setUp(self):
+        super(BatchTagTests, self).setUp()
+        self.user = create_user("batch_owner")
+        self.other_user = create_user("batch_other")
+        self.client.login(username=self.user.username, password='password')
+
+        self.image1 = create_image()
+        self.image2 = create_image()
+        self.image3 = create_image()
+
+        self.pin1 = create_pin(self.user, self.image1, ["python", "django"])
+        self.pin2 = create_pin(self.user, self.image2, ["python", "flask"])
+        self.pin3 = create_pin(self.user, self.image3, [])
+
+        self.other_image = create_image()
+        self.other_pin = create_pin(self.other_user, self.other_image, ["python"])
+        self.other_pin.private = True
+        self.other_pin.save()
+
+    def tearDown(self):
+        _teardown_models()
+
+    def _batch_add_url(self):
+        return reverse("batch-tags-batch-add")
+
+    def _batch_remove_url(self):
+        return reverse("batch-tags-batch-remove")
+
+    def _batch_merge_url(self):
+        return reverse("batch-tags-batch-merge")
+
+    def _batch_preview_url(self):
+        return reverse("batch-tags-preview")
+
+    def test_batch_add_tags_to_pins(self):
+        resp = self.client.post(
+            self._batch_add_url(),
+            data={"pin_ids": [self.pin1.id, self.pin2.id], "tags": ["web"]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()
+        self.assertEqual(data["affected_count"], 2)
+        self.assertIn(self.pin1.id, data["affected_pin_ids"])
+        self.assertIn(self.pin2.id, data["affected_pin_ids"])
+
+        self.pin1.refresh_from_db()
+        self.pin2.refresh_from_db()
+        pin1_tags = list(self.pin1.tags.names())
+        pin2_tags = list(self.pin2.tags.names())
+        self.assertIn("web", pin1_tags)
+        self.assertIn("web", pin2_tags)
+
+    def test_batch_add_tags_dry_run(self):
+        resp = self.client.post(
+            self._batch_add_url(),
+            data={"pin_ids": [self.pin1.id], "tags": ["web"], "dry_run": True},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()
+        self.assertEqual(data["operation"], "add")
+        self.assertIn("web", data["tags"])
+
+        self.pin1.refresh_from_db()
+        self.assertNotIn("web", list(self.pin1.tags.names()))
+
+    def test_batch_add_skips_private_pins_of_others(self):
+        resp = self.client.post(
+            self._batch_add_url(),
+            data={"pin_ids": [self.pin1.id, self.other_pin.id], "tags": ["web"]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()
+        self.assertIn(self.pin1.id, data["affected_pin_ids"])
+        self.assertIn(self.other_pin.id, data["skipped_pin_ids"])
+
+    def test_batch_add_tag_normalization(self):
+        resp = self.client.post(
+            self._batch_add_url(),
+            data={"pin_ids": [self.pin1.id], "tags": ["Python"], "dry_run": True},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()
+        self.assertIn("Python", data["normalized_tags"])
+
+    def test_batch_add_unauthenticated(self):
+        self.client.logout()
+        resp = self.client.post(
+            self._batch_add_url(),
+            data={"pin_ids": [self.pin1.id], "tags": ["web"]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_batch_add_invalid_pin_ids(self):
+        resp = self.client.post(
+            self._batch_add_url(),
+            data={"pin_ids": [99999], "tags": ["web"]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_batch_add_empty_tags(self):
+        resp = self.client.post(
+            self._batch_add_url(),
+            data={"pin_ids": [self.pin1.id], "tags": []},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_batch_remove_tags_from_pins(self):
+        resp = self.client.post(
+            self._batch_remove_url(),
+            data={"pin_ids": [self.pin1.id, self.pin2.id], "tags": ["python"]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()
+        self.assertEqual(data["affected_count"], 2)
+
+        self.pin1.refresh_from_db()
+        self.pin2.refresh_from_db()
+        self.assertNotIn("python", list(self.pin1.tags.names()))
+        self.assertNotIn("python", list(self.pin2.tags.names()))
+        self.assertIn("django", list(self.pin1.tags.names()))
+        self.assertIn("flask", list(self.pin2.tags.names()))
+
+    def test_batch_remove_tags_dry_run(self):
+        resp = self.client.post(
+            self._batch_remove_url(),
+            data={"pin_ids": [self.pin1.id], "tags": ["python"], "dry_run": True},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()
+        self.assertEqual(data["operation"], "remove")
+
+        self.pin1.refresh_from_db()
+        self.assertIn("python", list(self.pin1.tags.names()))
+
+    def test_batch_remove_nonexistent_tags(self):
+        resp = self.client.post(
+            self._batch_remove_url(),
+            data={"pin_ids": [self.pin1.id], "tags": ["nonexistent"]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()
+        self.assertEqual(data["affected_count"], 0)
+
+    def test_batch_remove_skips_private_pins_of_others(self):
+        resp = self.client.post(
+            self._batch_remove_url(),
+            data={"pin_ids": [self.other_pin.id], "tags": ["python"]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()
+        self.assertIn(self.other_pin.id, data["skipped_pin_ids"])
+
+    def test_batch_merge_tags(self):
+        resp = self.client.post(
+            self._batch_merge_url(),
+            data={"source_tags": ["django", "flask"], "target_tag": "web-framework"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()
+        self.assertGreater(data["affected_count"], 0)
+
+        self.pin1.refresh_from_db()
+        self.pin2.refresh_from_db()
+        self.assertIn("web-framework", list(self.pin1.tags.names()))
+        self.assertIn("web-framework", list(self.pin2.tags.names()))
+        self.assertNotIn("django", list(self.pin1.tags.names()))
+        self.assertNotIn("flask", list(self.pin2.tags.names()))
+
+    def test_batch_merge_dry_run(self):
+        resp = self.client.post(
+            self._batch_merge_url(),
+            data={
+                "source_tags": ["django"],
+                "target_tag": "web-framework",
+                "dry_run": True,
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()
+        self.assertEqual(data["operation"], "merge")
+
+        self.pin1.refresh_from_db()
+        self.assertIn("django", list(self.pin1.tags.names()))
+        self.assertNotIn("web-framework", list(self.pin1.tags.names()))
+
+    def test_batch_merge_prevents_same_source_and_target(self):
+        resp = self.client.post(
+            self._batch_merge_url(),
+            data={"source_tags": ["python"], "target_tag": "Python"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_batch_merge_tag_already_on_pin(self):
+        self.pin3.tags.add("web-framework")
+        self.pin3.save()
+
+        resp = self.client.post(
+            self._batch_merge_url(),
+            data={"source_tags": ["python"], "target_tag": "web-framework"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+        self.pin3.refresh_from_db()
+        tag_names = list(self.pin3.tags.names())
+        self.assertEqual(tag_names.count("web-framework"), 1)
+        self.assertNotIn("python", tag_names)
+
+    def test_batch_merge_cleans_up_orphan_tags(self):
+        self.pin1.tags.add("orphan")
+        self.pin1.save()
+        self.assertTrue(Tag.objects.filter(name="orphan").exists())
+
+        resp = self.client.post(
+            self._batch_merge_url(),
+            data={"source_tags": ["orphan"], "target_tag": "adopted"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+        self.assertFalse(Tag.objects.filter(name="orphan").exists())
+        self.assertTrue(Tag.objects.filter(name="adopted").exists())
+
+    def test_batch_merge_case_normalization(self):
+        Tag.objects.create(name="Python", slug="python-case-test")
+        resp = self.client.post(
+            self._batch_merge_url(),
+            data={
+                "source_tags": ["Python"],
+                "target_tag": "python-lang",
+                "dry_run": True,
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()
+        self.assertIn("normalized_target", data)
+
+    def test_preview_add_operation(self):
+        resp = self.client.post(
+            self._batch_preview_url(),
+            data={
+                "operation": "add",
+                "pin_ids": [self.pin1.id, self.pin2.id],
+                "tags": ["web"],
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()
+        self.assertEqual(data["operation"], "add")
+        self.assertIn("affected_count", data)
+        self.assertIn("skipped_count", data)
+
+    def test_preview_remove_operation(self):
+        resp = self.client.post(
+            self._batch_preview_url(),
+            data={
+                "operation": "remove",
+                "pin_ids": [self.pin1.id],
+                "tags": ["python"],
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()
+        self.assertEqual(data["operation"], "remove")
+        self.assertIn("pins_having_tag", data)
+
+    def test_preview_merge_operation(self):
+        resp = self.client.post(
+            self._batch_preview_url(),
+            data={
+                "operation": "merge",
+                "source_tags": ["django", "flask"],
+                "target_tag": "web-framework",
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()
+        self.assertEqual(data["operation"], "merge")
+        self.assertIn("source_pin_counts", data)
+        self.assertIn("target_pin_count", data)
+
+    def test_preview_missing_required_fields(self):
+        resp = self.client.post(
+            self._batch_preview_url(),
+            data={"operation": "add"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_batch_add_with_private_board(self):
+        private_board = Board.objects.create(
+            name="private_test",
+            submitter=self.other_user,
+            private=True,
+        )
+        private_board.pins.add(self.pin3)
+        private_board.save()
+
+        resp = self.client.post(
+            self._batch_add_url(),
+            data={"pin_ids": [self.pin3.id], "tags": ["test"]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()
+        self.assertIn(self.pin3.id, data["skipped_pin_ids"])
+
+    def test_batch_add_idempotent(self):
+        resp1 = self.client.post(
+            self._batch_add_url(),
+            data={"pin_ids": [self.pin1.id], "tags": ["new-tag"]},
+            format="json",
+        )
+        self.assertEqual(resp1.status_code, status.HTTP_200_OK)
+
+        resp2 = self.client.post(
+            self._batch_add_url(),
+            data={"pin_ids": [self.pin1.id], "tags": ["new-tag"]},
+            format="json",
+        )
+        self.assertEqual(resp2.status_code, status.HTTP_200_OK)
+
+        self.pin1.refresh_from_db()
+        tag_names = list(self.pin1.tags.names())
+        self.assertEqual(tag_names.count("new-tag"), 1)

@@ -3,6 +3,8 @@ from io import BytesIO
 import PIL
 from PIL import Image
 
+_RESAMPLE = getattr(Image, 'LANCZOS', getattr(Image, 'ANTIALIAS', Image.BILINEAR))
+
 
 @contextmanager
 def open_django_file(field_file):
@@ -74,7 +76,7 @@ def scale_and_crop_single(image, size, crop=False, upscale=False, quality=None):
 
     if scale < 1.0 or (scale > 1.0 and upscale):
         im = im.resize((int(source_x * scale), int(source_y * scale)),
-                       resample=Image.ANTIALIAS)
+                       resample=_RESAMPLE)
 
     if crop:
         # Use integer values now.
