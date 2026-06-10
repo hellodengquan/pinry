@@ -249,7 +249,7 @@ class PinTests(APITestCase):
             'That\'s something else (probably a CC logo)!',
             resp_data
         )
-        self.assertEquals(Pin.objects.count(), 2)
+        self.assertEqual(Pin.objects.count(), 2)
 
     def test_patch_detail_unauthenticated(self):
         image = create_image()

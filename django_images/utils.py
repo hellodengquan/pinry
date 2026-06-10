@@ -4,6 +4,15 @@ import PIL
 from PIL import Image
 
 
+try:
+    _RESAMPLE_LANCZOS = Image.Resampling.LANCZOS
+except AttributeError:
+    try:
+        _RESAMPLE_LANCZOS = Image.LANCZOS
+    except AttributeError:
+        _RESAMPLE_LANCZOS = Image.ANTIALIAS
+
+
 @contextmanager
 def open_django_file(field_file):
     field_file.open()
@@ -74,7 +83,7 @@ def scale_and_crop_single(image, size, crop=False, upscale=False, quality=None):
 
     if scale < 1.0 or (scale > 1.0 and upscale):
         im = im.resize((int(source_x * scale), int(source_y * scale)),
-                       resample=Image.ANTIALIAS)
+                       resample=_RESAMPLE_LANCZOS)
 
     if crop:
         # Use integer values now.
