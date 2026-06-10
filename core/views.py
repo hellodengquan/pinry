@@ -80,10 +80,50 @@ class TagAutoCompleteViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         )
 
 
+class BatchOperationResultCodes:
+    SUCCESS_MOVE = "success_move"
+    SUCCESS_COPY = "success_copy"
+    SUCCESS_DELETE = "success_delete"
+    SUCCESS_PRIVACY_PUBLIC = "success_privacy_public"
+    SUCCESS_PRIVACY_PRIVATE = "success_privacy_private"
+    PIN_NOT_FOUND = "pin_not_found"
+    PIN_NO_PERMISSION_ACCESS = "pin_no_permission_access"
+    PIN_NO_PERMISSION_OWNER = "pin_no_permission_owner"
+    TARGET_BOARD_NOT_FOUND = "target_board_not_found"
+    TARGET_BOARD_NO_PERMISSION = "target_board_no_permission"
+    SOURCE_BOARD_NOT_FOUND = "source_board_not_found"
+    SOURCE_BOARD_NO_PERMISSION = "source_board_no_permission"
+    OPERATION_FAILED = "operation_failed"
+
+
 class BatchOperationViewSet(GenericViewSet):
     permission_classes = [permissions.IsAuthenticated, ]
     serializer_class = api.BatchOperationSerializer
     queryset = Pin.objects.none()
+
+    RESULT_MESSAGES = {
+        BatchOperationResultCodes.SUCCESS_MOVE: "Moved successfully",
+        BatchOperationResultCodes.SUCCESS_COPY: "Copied successfully",
+        BatchOperationResultCodes.SUCCESS_DELETE: "Deleted successfully",
+        BatchOperationResultCodes.SUCCESS_PRIVACY_PUBLIC: "Privacy set to public",
+        BatchOperationResultCodes.SUCCESS_PRIVACY_PRIVATE: "Privacy set to private",
+        BatchOperationResultCodes.PIN_NOT_FOUND: "Pin does not exist",
+        BatchOperationResultCodes.PIN_NO_PERMISSION_ACCESS: "No permission to access this pin",
+        BatchOperationResultCodes.PIN_NO_PERMISSION_OWNER: "No permission to modify this pin",
+        BatchOperationResultCodes.TARGET_BOARD_NOT_FOUND: "Target board does not exist",
+        BatchOperationResultCodes.TARGET_BOARD_NO_PERMISSION: "No permission to modify target board",
+        BatchOperationResultCodes.SOURCE_BOARD_NOT_FOUND: "Source board does not exist",
+        BatchOperationResultCodes.SOURCE_BOARD_NO_PERMISSION: "No permission to modify source board",
+        BatchOperationResultCodes.OPERATION_FAILED: "Operation failed",
+    }
+
+    def _make_result(self, pin_id, success, code, message=None):
+        return {
+            "pin_id": pin_id,
+            "success": success,
+            "code": code,
+            "message": message or self.RESULT_MESSAGES.get(code, ""),
+        }
 
     def _build_result(self, operation, results):
         total = len(results)
@@ -123,11 +163,12 @@ class BatchOperationViewSet(GenericViewSet):
             target_board = Board.objects.get(id=target_board_id)
         except Board.DoesNotExist:
             for pid in pin_ids:
-                results.append({
-                    "pin_id": pid,
-                    "success": False,
-                    "message": "Target board does not exist",
-                })
+                results.append(
+                    self._make_result(
+                        pid, False,
+                        BatchOperationResultCodes.TARGET_BOARD_NOT_FOUND,
+                    )
+                )
             return Response(
                 self._build_result("move", results),
                 status=status.HTTP_404_NOT_FOUND,
@@ -135,11 +176,12 @@ class BatchOperationViewSet(GenericViewSet):
 
         if not self._is_board_owner(user, target_board):
             for pid in pin_ids:
-                results.append({
-                    "pin_id": pid,
-                    "success": False,
-                    "message": "No permission to modify target board",
-                })
+                results.append(
+                    self._make_result(
+                        pid, False,
+                        BatchOperationResultCodes.TARGET_BOARD_NO_PERMISSION,
+                    )
+                )
             return Response(
                 self._build_result("move", results),
                 status=status.HTTP_403_FORBIDDEN,
@@ -151,22 +193,24 @@ class BatchOperationViewSet(GenericViewSet):
                 source_board = Board.objects.get(id=source_board_id)
                 if not self._is_board_owner(user, source_board):
                     for pid in pin_ids:
-                        results.append({
-                            "pin_id": pid,
-                            "success": False,
-                            "message": "No permission to modify source board",
-                        })
+                        results.append(
+                            self._make_result(
+                                pid, False,
+                                BatchOperationResultCodes.SOURCE_BOARD_NO_PERMISSION,
+                            )
+                        )
                     return Response(
                         self._build_result("move", results),
                         status=status.HTTP_403_FORBIDDEN,
                     )
             except Board.DoesNotExist:
                 for pid in pin_ids:
-                    results.append({
-                        "pin_id": pid,
-                        "success": False,
-                        "message": "Source board does not exist",
-                    })
+                    results.append(
+                        self._make_result(
+                            pid, False,
+                            BatchOperationResultCodes.SOURCE_BOARD_NOT_FOUND,
+                        )
+                    )
                 return Response(
                     self._build_result("move", results),
                     status=status.HTTP_404_NOT_FOUND,
@@ -178,19 +222,21 @@ class BatchOperationViewSet(GenericViewSet):
         for pin_id in pin_ids:
             pin = pin_map.get(pin_id)
             if pin is None:
-                results.append({
-                    "pin_id": pin_id,
-                    "success": False,
-                    "message": "Pin does not exist",
-                })
+                results.append(
+                    self._make_result(
+                        pin_id, False,
+                        BatchOperationResultCodes.PIN_NOT_FOUND,
+                    )
+                )
                 continue
 
             if not self._can_access_pin(user, pin):
-                results.append({
-                    "pin_id": pin_id,
-                    "success": False,
-                    "message": "No permission to access this pin",
-                })
+                results.append(
+                    self._make_result(
+                        pin_id, False,
+                        BatchOperationResultCodes.PIN_NO_PERMISSION_ACCESS,
+                    )
+                )
                 continue
 
             try:
@@ -198,17 +244,20 @@ class BatchOperationViewSet(GenericViewSet):
                     if source_board:
                         source_board.pins.remove(pin)
                     target_board.pins.add(pin)
-                    results.append({
-                        "pin_id": pin_id,
-                        "success": True,
-                        "message": "Moved successfully",
-                    })
+                    results.append(
+                        self._make_result(
+                            pin_id, True,
+                            BatchOperationResultCodes.SUCCESS_MOVE,
+                        )
+                    )
             except Exception as e:
-                results.append({
-                    "pin_id": pin_id,
-                    "success": False,
-                    "message": f"Failed to move: {str(e)}",
-                })
+                results.append(
+                    self._make_result(
+                        pin_id, False,
+                        BatchOperationResultCodes.OPERATION_FAILED,
+                        f"Failed to move: {str(e)}",
+                    )
+                )
 
         response_status = status.HTTP_200_OK if any(
             r["success"] for r in results
@@ -232,11 +281,12 @@ class BatchOperationViewSet(GenericViewSet):
             target_board = Board.objects.get(id=target_board_id)
         except Board.DoesNotExist:
             for pid in pin_ids:
-                results.append({
-                    "pin_id": pid,
-                    "success": False,
-                    "message": "Target board does not exist",
-                })
+                results.append(
+                    self._make_result(
+                        pid, False,
+                        BatchOperationResultCodes.TARGET_BOARD_NOT_FOUND,
+                    )
+                )
             return Response(
                 self._build_result("copy", results),
                 status=status.HTTP_404_NOT_FOUND,
@@ -244,11 +294,12 @@ class BatchOperationViewSet(GenericViewSet):
 
         if not self._is_board_owner(user, target_board):
             for pid in pin_ids:
-                results.append({
-                    "pin_id": pid,
-                    "success": False,
-                    "message": "No permission to modify target board",
-                })
+                results.append(
+                    self._make_result(
+                        pid, False,
+                        BatchOperationResultCodes.TARGET_BOARD_NO_PERMISSION,
+                    )
+                )
             return Response(
                 self._build_result("copy", results),
                 status=status.HTTP_403_FORBIDDEN,
@@ -260,35 +311,40 @@ class BatchOperationViewSet(GenericViewSet):
         for pin_id in pin_ids:
             pin = pin_map.get(pin_id)
             if pin is None:
-                results.append({
-                    "pin_id": pin_id,
-                    "success": False,
-                    "message": "Pin does not exist",
-                })
+                results.append(
+                    self._make_result(
+                        pin_id, False,
+                        BatchOperationResultCodes.PIN_NOT_FOUND,
+                    )
+                )
                 continue
 
             if not self._can_access_pin(user, pin):
-                results.append({
-                    "pin_id": pin_id,
-                    "success": False,
-                    "message": "No permission to access this pin",
-                })
+                results.append(
+                    self._make_result(
+                        pin_id, False,
+                        BatchOperationResultCodes.PIN_NO_PERMISSION_ACCESS,
+                    )
+                )
                 continue
 
             try:
                 with transaction.atomic():
                     target_board.pins.add(pin)
-                    results.append({
-                        "pin_id": pin_id,
-                        "success": True,
-                        "message": "Copied successfully",
-                    })
+                    results.append(
+                        self._make_result(
+                            pin_id, True,
+                            BatchOperationResultCodes.SUCCESS_COPY,
+                        )
+                    )
             except Exception as e:
-                results.append({
-                    "pin_id": pin_id,
-                    "success": False,
-                    "message": f"Failed to copy: {str(e)}",
-                })
+                results.append(
+                    self._make_result(
+                        pin_id, False,
+                        BatchOperationResultCodes.OPERATION_FAILED,
+                        f"Failed to copy: {str(e)}",
+                    )
+                )
 
         response_status = status.HTTP_200_OK if any(
             r["success"] for r in results
@@ -312,35 +368,40 @@ class BatchOperationViewSet(GenericViewSet):
         for pin_id in pin_ids:
             pin = pin_map.get(pin_id)
             if pin is None:
-                results.append({
-                    "pin_id": pin_id,
-                    "success": False,
-                    "message": "Pin does not exist",
-                })
+                results.append(
+                    self._make_result(
+                        pin_id, False,
+                        BatchOperationResultCodes.PIN_NOT_FOUND,
+                    )
+                )
                 continue
 
             if pin.submitter != user:
-                results.append({
-                    "pin_id": pin_id,
-                    "success": False,
-                    "message": "No permission to delete this pin",
-                })
+                results.append(
+                    self._make_result(
+                        pin_id, False,
+                        BatchOperationResultCodes.PIN_NO_PERMISSION_OWNER,
+                    )
+                )
                 continue
 
             try:
                 with transaction.atomic():
                     pin.delete()
-                    results.append({
-                        "pin_id": pin_id,
-                        "success": True,
-                        "message": "Deleted successfully",
-                    })
+                    results.append(
+                        self._make_result(
+                            pin_id, True,
+                            BatchOperationResultCodes.SUCCESS_DELETE,
+                        )
+                    )
             except Exception as e:
-                results.append({
-                    "pin_id": pin_id,
-                    "success": False,
-                    "message": f"Failed to delete: {str(e)}",
-                })
+                results.append(
+                    self._make_result(
+                        pin_id, False,
+                        BatchOperationResultCodes.OPERATION_FAILED,
+                        f"Failed to delete: {str(e)}",
+                    )
+                )
 
         response_status = status.HTTP_200_OK if any(
             r["success"] for r in results
@@ -362,39 +423,50 @@ class BatchOperationViewSet(GenericViewSet):
         pins = Pin.objects.filter(id__in=pin_ids)
         pin_map = {p.id: p for p in pins}
 
+        success_code = (
+            BatchOperationResultCodes.SUCCESS_PRIVACY_PRIVATE
+            if private
+            else BatchOperationResultCodes.SUCCESS_PRIVACY_PUBLIC
+        )
+
         for pin_id in pin_ids:
             pin = pin_map.get(pin_id)
             if pin is None:
-                results.append({
-                    "pin_id": pin_id,
-                    "success": False,
-                    "message": "Pin does not exist",
-                })
+                results.append(
+                    self._make_result(
+                        pin_id, False,
+                        BatchOperationResultCodes.PIN_NOT_FOUND,
+                    )
+                )
                 continue
 
             if pin.submitter != user:
-                results.append({
-                    "pin_id": pin_id,
-                    "success": False,
-                    "message": "No permission to modify this pin",
-                })
+                results.append(
+                    self._make_result(
+                        pin_id, False,
+                        BatchOperationResultCodes.PIN_NO_PERMISSION_OWNER,
+                    )
+                )
                 continue
 
             try:
                 with transaction.atomic():
                     pin.private = private
                     pin.save(update_fields=["private"])
-                    results.append({
-                        "pin_id": pin_id,
-                        "success": True,
-                        "message": f"Privacy set to { 'private' if private else 'public' }",
-                    })
+                    results.append(
+                        self._make_result(
+                            pin_id, True,
+                            success_code,
+                        )
+                    )
             except Exception as e:
-                results.append({
-                    "pin_id": pin_id,
-                    "success": False,
-                    "message": f"Failed to update privacy: {str(e)}",
-                })
+                results.append(
+                    self._make_result(
+                        pin_id, False,
+                        BatchOperationResultCodes.OPERATION_FAILED,
+                        f"Failed to update privacy: {str(e)}",
+                    )
+                )
 
         response_status = status.HTTP_200_OK if any(
             r["success"] for r in results

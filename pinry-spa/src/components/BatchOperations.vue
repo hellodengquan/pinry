@@ -74,7 +74,7 @@
                           {{ item.success ? $t("success") : $t("failed") }}
                         </span>
                       </td>
-                      <td class="is-size-7">{{ item.message }}</td>
+                      <td class="is-size-7">{{ getLocalizedMessage(item) }}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -188,6 +188,16 @@ export default {
     }
   },
   methods: {
+    getLocalizedMessage(item) {
+      if (item.code) {
+        const key = `resultCode.${item.code}`;
+        const translated = this.$t(key);
+        if (translated !== key) {
+          return translated;
+        }
+      }
+      return item.message || '';
+    },
     fetchBoardList() {
       if (!this.username) return;
       API.Board.fetchFullList(this.username).then(

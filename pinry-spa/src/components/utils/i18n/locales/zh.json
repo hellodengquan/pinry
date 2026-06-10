@@ -112,5 +112,20 @@
   "fetchBoardListFailed": "获取画板列表失败",
   "batchOperationFailed": "批量操作执行失败",
   "batchCopySucceedToast": "批量复制成功",
-  "batchPrivacySucceedToast": "隐私状态已更新"
+  "batchPrivacySucceedToast": "隐私状态已更新",
+  "resultCode": {
+    "success_move": "移动成功",
+    "success_copy": "复制成功",
+    "success_delete": "删除成功",
+    "success_privacy_public": "已设为公开",
+    "success_privacy_private": "已设为私有",
+    "pin_not_found": "Pin 不存在",
+    "pin_no_permission_access": "无权访问此 Pin",
+    "pin_no_permission_owner": "无权操作此 Pin",
+    "target_board_not_found": "目标画板不存在",
+    "target_board_no_permission": "无权修改目标画板",
+    "source_board_not_found": "源画板不存在",
+    "source_board_no_permission": "无权修改源画板",
+    "operation_failed": "操作失败"
+  }
 }

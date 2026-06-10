@@ -112,5 +112,20 @@
     "fetchBoardListFailed": "Échec de la récupération des tableaux",
     "batchOperationFailed": "Échec de l'opération groupée",
     "batchCopySucceedToast": "Copie groupée réussie",
-    "batchPrivacySucceedToast": "Statut de confidentialité mis à jour"
+    "batchPrivacySucceedToast": "Statut de confidentialité mis à jour",
+    "resultCode": {
+        "success_move": "Déplacement réussi",
+        "success_copy": "Copie réussie",
+        "success_delete": "Suppression réussie",
+        "success_privacy_public": "Défini en public",
+        "success_privacy_private": "Défini en privé",
+        "pin_not_found": "Fiche introuvable",
+        "pin_no_permission_access": "Aucune autorisation d'accès",
+        "pin_no_permission_owner": "Aucune autorisation de modification",
+        "target_board_not_found": "Tableau cible introuvable",
+        "target_board_no_permission": "Aucune autorisation sur le tableau cible",
+        "source_board_not_found": "Tableau source introuvable",
+        "source_board_no_permission": "Aucune autorisation sur le tableau source",
+        "operation_failed": "Échec de l'opération"
+    }
 }

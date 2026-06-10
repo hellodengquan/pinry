@@ -112,5 +112,20 @@
     "fetchBoardListFailed": "Failed to fetch board list",
     "batchOperationFailed": "Batch operation failed",
     "batchCopySucceedToast": "Batch copy succeeded",
-    "batchPrivacySucceedToast": "Privacy status updated"
+    "batchPrivacySucceedToast": "Privacy status updated",
+    "resultCode": {
+        "success_move": "Moved successfully",
+        "success_copy": "Copied successfully",
+        "success_delete": "Deleted successfully",
+        "success_privacy_public": "Set to public",
+        "success_privacy_private": "Set to private",
+        "pin_not_found": "Pin does not exist",
+        "pin_no_permission_access": "No permission to access this pin",
+        "pin_no_permission_owner": "No permission to modify this pin",
+        "target_board_not_found": "Target board does not exist",
+        "target_board_no_permission": "No permission to modify target board",
+        "source_board_not_found": "Source board does not exist",
+        "source_board_no_permission": "No permission to modify source board",
+        "operation_failed": "Operation failed"
+    }
 }

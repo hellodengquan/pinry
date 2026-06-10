@@ -297,6 +297,7 @@ class BatchUpdatePrivacySerializer(BatchOperationSerializer):
 class BatchOperationItemResultSerializer(serializers.Serializer):
     pin_id = serializers.IntegerField()
     success = serializers.BooleanField()
+    code = serializers.CharField(required=False, allow_blank=True)
     message = serializers.CharField(required=False, allow_blank=True)
 
 
