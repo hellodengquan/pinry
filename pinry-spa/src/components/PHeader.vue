@@ -61,6 +61,11 @@
                   class="navbar-item">
                   {{ $t("profileLink") }}
                 </router-link>
+                <router-link
+                  :to="{ name: 'batch-tags' }"
+                  class="navbar-item">
+                  {{ $t("batchTagLink") }}
+                </router-link>
               </div>
             </div>
             <div class="navbar-item has-dropdown is-hoverable">

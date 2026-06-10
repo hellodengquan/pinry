@@ -272,6 +272,25 @@ const User = {
   },
 };
 
+const BatchTag = {
+  preview(data) {
+    const url = `${API_PREFIX}batch-tags/preview/`;
+    return axios.post(url, data);
+  },
+  add(data) {
+    const url = `${API_PREFIX}batch-tags/add/`;
+    return axios.post(url, data);
+  },
+  remove(data) {
+    const url = `${API_PREFIX}batch-tags/remove/`;
+    return axios.post(url, data);
+  },
+  merge(data) {
+    const url = `${API_PREFIX}batch-tags/merge/`;
+    return axios.post(url, data);
+  },
+};
+
 const Tag = {
   fetchList() {
     const url = `${API_PREFIX}tags-auto-complete/`;
@@ -283,6 +302,7 @@ export default {
   Tag,
   Pin,
   Board,
+  BatchTag,
   fetchPin,
   fetchPins,
   fetchBoardForUser,
