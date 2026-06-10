@@ -21,9 +21,9 @@
     <b-field>
       <b-select
         class="select-list"
-        multiple
+        :multiple="!single"
         expanded
-        native-size="8"
+        :native-size="single ? 8 : 8"
         v-model="selectedOptions">
         <template v-for="option in availableOptions">
           <option
@@ -68,6 +68,10 @@ export default {
         return [];
       },
     },
+    single: {
+      type: Boolean,
+      default: false,
+    },
   },
   data() {
     const model = ModelForm.fromFields(fields);
@@ -81,7 +85,7 @@ export default {
   },
   methods: {
     select(board) {
-      this.selectedOptions = [board.value];
+      this.selectedOptions = this.single ? board.value : [board.value];
     },
     createNewBoard() {
       const self = this;
@@ -113,7 +117,12 @@ export default {
     },
     selectedOptions() {
       this.helper.resetAllFields();
-      this.$emit('selected', this.selectedOptions);
+      if (this.single) {
+        const val = this.selectedOptions;
+        this.$emit('selected', val ? [val] : []);
+      } else {
+        this.$emit('selected', this.selectedOptions);
+      }
     },
   },
 };

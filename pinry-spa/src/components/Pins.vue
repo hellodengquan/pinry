@@ -1,6 +1,88 @@
 <template>
   <div class="pins">
     <section class="section">
+      <div class="batch-toolbar container" v-if="showBatchToolbar" style="margin-bottom: 1rem;">
+        <div class="card">
+          <div class="card-content" style="padding: 0.75rem 1rem;">
+            <div class="level is-mobile">
+              <div class="level-left">
+                <div class="level-item">
+                  <span class="tag is-info is-medium">
+                    {{ $t("selectedPinsCount", { count: selectedPins.length }) }}
+                  </span>
+                </div>
+                <div class="level-item" v-if="editorMeta.user.loggedIn">
+                  <b-checkbox
+                    v-model="selectAllChecked"
+                    :indeterminate="isIndeterminate"
+                    @input="toggleSelectAll">
+                    {{ $t("selectAll") }}
+                  </b-checkbox>
+                </div>
+              </div>
+              <div class="level-right">
+                <div class="level-item" v-if="editorMeta.user.loggedIn && pinFilters.boardFilter && isCurrentBoardOwner">
+                  <b-button
+                    type="is-primary"
+                    size="is-small"
+                    icon-left="mdi mdi-arrow-all"
+                    :disabled="selectedPins.length === 0"
+                    @click="openBatchMove">
+                    {{ $t("batchMoveButton") }}
+                  </b-button>
+                </div>
+                <div class="level-item" v-if="editorMeta.user.loggedIn">
+                  <b-button
+                    type="is-link"
+                    size="is-small"
+                    icon-left="mdi mdi-content-copy"
+                    :disabled="selectedPins.length === 0"
+                    @click="openBatchCopy">
+                    {{ $t("batchCopyButton") }}
+                  </b-button>
+                </div>
+                <div class="level-item" v-if="editorMeta.user.loggedIn">
+                  <b-button
+                    type="is-warning"
+                    size="is-small"
+                    icon-left="mdi mdi-eye-off-outline"
+                    :disabled="selectedOwnedPins.length === 0"
+                    @click="openBatchPrivacy">
+                    {{ $t("batchPrivacyButton") }}
+                  </b-button>
+                </div>
+                <div class="level-item" v-if="editorMeta.user.loggedIn">
+                  <b-button
+                    type="is-danger"
+                    size="is-small"
+                    icon-left="mdi mdi-delete"
+                    :disabled="selectedOwnedPins.length === 0"
+                    @click="openBatchDelete">
+                    {{ $t("batchDeleteButton") }}
+                  </b-button>
+                </div>
+                <div class="level-item">
+                  <b-button
+                    type="is-light"
+                    size="is-small"
+                    icon-left="mdi mdi-close"
+                    @click="exitSelectMode">
+                    {{ $t("exitSelectMode") }}
+                  </b-button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="select-mode-entry container" v-if="editorMeta.user.loggedIn && !selectMode" style="margin-bottom: 0.5rem;">
+        <a @click="enterSelectMode" style="cursor: pointer; font-size: 0.85rem; color: #3273dc;">
+          <span class="icon is-small"><i class="mdi mdi-check-all"></i></span>
+          {{ $t("enterSelectMode") }}
+        </a>
+      </div>
+
       <div id="pins-container" class="container" v-if="blocks">
         <div
           v-masonry=""
@@ -12,16 +94,24 @@
           <template v-for="item in blocks">
             <div v-bind:key="item.id"
                  v-masonry-tile
-                 :class="item.class"
+                 :class="[item.class, { 'pin-selected': isPinSelected(item.id) }]"
                  class="grid pin-masonry">
               <div class="grid-sizer"></div>
               <div class="gutter-sizer"></div>
               <div class="pin-card grid-item">
                 <div @mouseenter="showEditButtons(item.id)"
                      @mouseleave="hideEditButtons(item.id)"
-                >
+                     :class="{ 'selectable-card': selectMode }"
+                     @click.stop="selectMode ? togglePinSelection(item) : null">
+                  <div v-if="selectMode" class="pin-select-checkbox" @click.stop="togglePinSelection(item)">
+                    <b-checkbox
+                      v-model="selectedIdsMap[item.id]"
+                      :disabled="false"
+                      :value="true">
+                    </b-checkbox>
+                  </div>
                   <EditorUI
-                    v-show="shouldShowEdit(item.id)"
+                    v-show="!selectMode && shouldShowEdit(item.id)"
                     :pin="item"
                     :currentUsername="editorMeta.user.meta.username"
                     :currentBoard="editorMeta.currentBoard"
@@ -30,7 +120,7 @@
                   ></EditorUI>
                   <img :src="item.url"
                      @load="onPinImageLoaded(item.id)"
-                     @click="openPreview(item)"
+                     @click="selectMode ? null : openPreview(item)"
                      :alt="item.description"
                      :style="item.style"
                      class="pin-preview-image">
@@ -85,6 +175,7 @@ import scroll from './utils/scroll';
 import bus from './utils/bus';
 import EditorUI from './editors/PinEditorUI.vue';
 import niceLinks from './utils/niceLinks';
+import modals from './modals';
 
 function createImageItem(pin) {
   const image = {};
@@ -125,6 +216,8 @@ function initialData() {
         meta: {},
       },
     },
+    selectMode: false,
+    selectedIdsMap: {},
   };
 }
 
@@ -148,6 +241,35 @@ export default {
           boardFilter: null,
         };
       },
+    },
+  },
+  computed: {
+    showBatchToolbar() {
+      return this.selectMode && this.editorMeta.user.loggedIn;
+    },
+    selectedPins() {
+      return this.blocks.filter(b => this.selectedIdsMap[b.id]);
+    },
+    selectedOwnedPins() {
+      const username = this.editorMeta.user.meta.username;
+      return this.selectedPins.filter(p => p.author === username);
+    },
+    selectablePins() {
+      return this.blocks;
+    },
+    isCurrentBoardOwner() {
+      if (!this.editorMeta.currentBoard || !this.editorMeta.currentBoard.submitter) {
+        return false;
+      }
+      return this.editorMeta.currentBoard.submitter.username === this.editorMeta.user.meta.username;
+    },
+    selectAllChecked() {
+      if (this.selectablePins.length === 0) return false;
+      return this.selectablePins.every(p => this.selectedIdsMap[p.id]);
+    },
+    isIndeterminate() {
+      const selectedCount = this.selectablePins.filter(p => this.selectedIdsMap[p.id]).length;
+      return selectedCount > 0 && selectedCount < this.selectablePins.length;
     },
   },
   watch: {
@@ -289,6 +411,107 @@ export default {
       );
     },
     niceLinks,
+    enterSelectMode() {
+      this.selectMode = true;
+    },
+    exitSelectMode() {
+      this.selectMode = false;
+      this.selectedIdsMap = {};
+    },
+    isPinSelected(pinId) {
+      return !!this.selectedIdsMap[pinId];
+    },
+    togglePinSelection(item) {
+      this.$set(this.selectedIdsMap, item.id, !this.selectedIdsMap[item.id]);
+    },
+    toggleSelectAll(value) {
+      if (value) {
+        const newMap = {};
+        this.selectablePins.forEach(p => { newMap[p.id] = true; });
+        this.selectedIdsMap = newMap;
+      } else {
+        this.selectedIdsMap = {};
+      }
+    },
+    openBatchMove() {
+      if (this.selectedPins.length === 0) return;
+      modals.openBatchOperations(
+        this,
+        {
+          operation: 'move',
+          selectedPins: this.selectedPins,
+          username: this.editorMeta.user.meta.username,
+          currentBoardId: this.pinFilters.boardFilter ? Number(this.pinFilters.boardFilter) : null,
+        },
+        {
+          'batch-move-succeed': (succeededIds) => this.onBatchMoveSucceed(succeededIds),
+        },
+      );
+    },
+    openBatchCopy() {
+      if (this.selectedPins.length === 0) return;
+      modals.openBatchOperations(
+        this,
+        {
+          operation: 'copy',
+          selectedPins: this.selectedPins,
+          username: this.editorMeta.user.meta.username,
+          currentBoardId: null,
+        },
+        {
+          'batch-copy-succeed': () => {
+            this.$buefy.toast.open(this.$t('batchCopySucceedToast'));
+          },
+        },
+      );
+    },
+    openBatchDelete() {
+      if (this.selectedOwnedPins.length === 0) return;
+      modals.openBatchOperations(
+        this,
+        {
+          operation: 'delete',
+          selectedPins: this.selectedOwnedPins,
+          username: this.editorMeta.user.meta.username,
+          currentBoardId: null,
+        },
+        {
+          'batch-delete-succeed': (succeededIds) => this.onBatchDeleteSucceed(succeededIds),
+        },
+      );
+    },
+    openBatchPrivacy() {
+      if (this.selectedOwnedPins.length === 0) return;
+      modals.openBatchOperations(
+        this,
+        {
+          operation: 'privacy',
+          selectedPins: this.selectedOwnedPins,
+          username: this.editorMeta.user.meta.username,
+          currentBoardId: null,
+        },
+        {
+          'batch-privacy-succeed': () => {
+            this.$buefy.toast.open(this.$t('batchPrivacySucceedToast'));
+            this.reset();
+          },
+        },
+      );
+    },
+    onBatchMoveSucceed(succeededIds) {
+      if (this.pinFilters.boardFilter) {
+        succeededIds.forEach(id => {
+          this.$delete(this.selectedIdsMap, id);
+        });
+        this.reset();
+      }
+    },
+    onBatchDeleteSucceed(succeededIds) {
+      succeededIds.forEach(id => {
+        this.$delete(this.selectedIdsMap, id);
+      });
+      this.reset();
+    },
   },
   created() {
     bus.bus.$on(bus.events.refreshPin, this.reset);
@@ -318,6 +541,56 @@ export default {
 }
 .pin-masonry {
   opacity: 0;
+}
+
+/* selected state */
+.pin-selected {
+  .pin-card {
+    box-shadow: 0 0 0 3px #3273dc;
+    border-radius: 3px;
+  }
+}
+
+.selectable-card {
+  position: relative;
+  cursor: pointer;
+  &:hover {
+    opacity: 0.9;
+  }
+}
+
+.pin-select-checkbox {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 10;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 4px;
+  padding: 4px 6px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.select-mode-entry {
+  a {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+}
+
+.batch-toolbar {
+  .card {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  }
+  .level-item {
+    margin-right: 0.5rem;
+    &:last-child {
+      margin-right: 0;
+    }
+  }
 }
 
 /* card */

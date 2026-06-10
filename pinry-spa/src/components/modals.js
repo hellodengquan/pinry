@@ -3,6 +3,7 @@ import LoginForm from './LoginForm.vue';
 import SignUpForm from './SignUpForm.vue';
 import BoardEdit from './BoardEdit.vue';
 import Add2Board from './pin_edit/Add2Board.vue';
+import BatchOperations from './BatchOperations.vue';
 
 
 function openPinEdit(vm, props = null, onCreated = null) {
@@ -30,6 +31,18 @@ function openAdd2Board(vm, pin, username) {
       component: Add2Board,
       props: { pin, username },
       hasModalCard: true,
+    },
+  );
+}
+
+function openBatchOperations(vm, props, events = {}) {
+  vm.$buefy.modal.open(
+    {
+      parent: vm,
+      component: BatchOperations,
+      props,
+      hasModalCard: true,
+      events,
     },
   );
 }
@@ -90,4 +103,5 @@ export default {
   openPinEdit,
   openLogin,
   openSignUp,
+  openBatchOperations,
 };

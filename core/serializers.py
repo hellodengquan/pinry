@@ -268,6 +268,46 @@ class BoardSerializer(serializers.HyperlinkedModelSerializer):
         return super(BoardSerializer, self).create(validated_data)
 
 
+class BatchOperationSerializer(serializers.Serializer):
+    pin_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        min_length=1,
+        max_length=100,
+        allow_empty=False,
+    )
+
+
+class BatchMovePinsSerializer(BatchOperationSerializer):
+    source_board_id = serializers.IntegerField(min_value=1, required=False, allow_null=True)
+    target_board_id = serializers.IntegerField(min_value=1)
+
+
+class BatchCopyPinsSerializer(BatchOperationSerializer):
+    target_board_id = serializers.IntegerField(min_value=1)
+
+
+class BatchDeletePinsSerializer(BatchOperationSerializer):
+    pass
+
+
+class BatchUpdatePrivacySerializer(BatchOperationSerializer):
+    private = serializers.BooleanField()
+
+
+class BatchOperationItemResultSerializer(serializers.Serializer):
+    pin_id = serializers.IntegerField()
+    success = serializers.BooleanField()
+    message = serializers.CharField(required=False, allow_blank=True)
+
+
+class BatchOperationResultSerializer(serializers.Serializer):
+    operation = serializers.CharField()
+    total = serializers.IntegerField()
+    success_count = serializers.IntegerField()
+    failed_count = serializers.IntegerField()
+    results = BatchOperationItemResultSerializer(many=True)
+
+
 class TagAutoCompleteSerializer(serializers.ModelSerializer):
 
     class Meta:

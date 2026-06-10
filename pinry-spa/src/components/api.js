@@ -279,10 +279,34 @@ const Tag = {
   },
 };
 
+const BatchOperation = {
+  movePins(pinIds, targetBoardId, sourceBoardId = null) {
+    const url = `${API_PREFIX}batch-operations/move-pins/`;
+    const data = { pin_ids: pinIds, target_board_id: targetBoardId };
+    if (sourceBoardId) {
+      data.source_board_id = sourceBoardId;
+    }
+    return axios.post(url, data);
+  },
+  copyPins(pinIds, targetBoardId) {
+    const url = `${API_PREFIX}batch-operations/copy-pins/`;
+    return axios.post(url, { pin_ids: pinIds, target_board_id: targetBoardId });
+  },
+  deletePins(pinIds) {
+    const url = `${API_PREFIX}batch-operations/delete-pins/`;
+    return axios.post(url, { pin_ids: pinIds });
+  },
+  updatePrivacy(pinIds, privateFlag) {
+    const url = `${API_PREFIX}batch-operations/update-privacy/`;
+    return axios.post(url, { pin_ids: pinIds, private: privateFlag });
+  },
+};
+
 export default {
   Tag,
   Pin,
   Board,
+  BatchOperation,
   fetchPin,
   fetchPins,
   fetchBoardForUser,
