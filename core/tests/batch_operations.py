@@ -292,6 +292,52 @@ class BatchCopyPinsTests(BatchOperationBaseTest):
         self.assertEqual(response.data["success_count"], 1)
         self.assertTrue(self.board_other.pins.filter(id=self.pin_owned_public.id).exists())
 
+    def test_copy_pin_already_in_target_board_returns_already_code(self):
+        self._login_owner()
+        self.board_owned.pins.add(self.pin_owned_public)
+        image4 = create_image()
+        pin_new = create_pin(self.owner, image=image4, tags=[])
+        pin_new.private = False
+        pin_new.save()
+
+        data = {
+            "pin_ids": [self.pin_owned_public.id, pin_new.id],
+            "target_board_id": self.board_owned.id,
+        }
+        response = self.client.post(self.url, data=data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["total"], 2)
+        self.assertEqual(response.data["success_count"], 1)
+        self.assertEqual(response.data["failed_count"], 1)
+
+        results_by_id = {r["pin_id"]: r for r in response.data["results"]}
+        self.assertEqual(
+            results_by_id[self.pin_owned_public.id]["code"],
+            BatchOperationResultCodes.PIN_ALREADY_IN_BOARD,
+        )
+        self.assertFalse(results_by_id[self.pin_owned_public.id]["success"])
+        self.assertEqual(
+            results_by_id[pin_new.id]["code"],
+            BatchOperationResultCodes.SUCCESS_COPY,
+        )
+        self.assertTrue(results_by_id[pin_new.id]["success"])
+
+    def test_copy_all_already_in_target_returns_400(self):
+        self._login_owner()
+        self.board_owned.pins.add(self.pin_owned_public)
+        self.board_owned.pins.add(self.pin_owned_private)
+
+        data = {
+            "pin_ids": [self.pin_owned_public.id, self.pin_owned_private.id],
+            "target_board_id": self.board_owned.id,
+        }
+        response = self.client.post(self.url, data=data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["success_count"], 0)
+        self.assertEqual(response.data["failed_count"], 2)
+        for r in response.data["results"]:
+            self.assertEqual(r["code"], BatchOperationResultCodes.PIN_ALREADY_IN_BOARD)
+
 
 class BatchDeletePinsTests(BatchOperationBaseTest):
     """Tests for POST /batch-operations/delete-pins/"""

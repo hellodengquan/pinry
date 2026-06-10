@@ -94,6 +94,7 @@ class BatchOperationResultCodes:
     SOURCE_BOARD_NOT_FOUND = "source_board_not_found"
     SOURCE_BOARD_NO_PERMISSION = "source_board_no_permission"
     OPERATION_FAILED = "operation_failed"
+    PIN_ALREADY_IN_BOARD = "pin_already_in_board"
 
 
 class BatchOperationViewSet(GenericViewSet):
@@ -115,8 +116,12 @@ class BatchOperationViewSet(GenericViewSet):
         BatchOperationResultCodes.SOURCE_BOARD_NOT_FOUND: "Source board does not exist",
         BatchOperationResultCodes.SOURCE_BOARD_NO_PERMISSION: "No permission to modify source board",
         BatchOperationResultCodes.OPERATION_FAILED: "Operation failed",
+        BatchOperationResultCodes.PIN_ALREADY_IN_BOARD: "Pin already exists in the target board",
     }
 
+    # ------------------------------------------------------------------
+    # 公共工具方法
+    # ------------------------------------------------------------------
     def _make_result(self, pin_id, success, code, message=None):
         return {
             "pin_id": pin_id,
@@ -145,333 +150,379 @@ class BatchOperationViewSet(GenericViewSet):
     def _is_board_owner(self, user, board):
         return board.submitter == user
 
-    @action(detail=False, methods=["post"], url_path="move-pins")
-    def move_pins(self, request):
-        serializer = api.BatchMovePinsSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    def _build_response(self, operation, results):
+        any_success = any(r["success"] for r in results)
+        any_failed = any(not r["success"] for r in results)
+        if any_success:
+            code = status.HTTP_200_OK
+        elif not results:
+            code = status.HTTP_400_BAD_REQUEST
+        else:
+            code = status.HTTP_400_BAD_REQUEST
+            first_code = results[0].get("code")
+            if first_code in (
+                BatchOperationResultCodes.TARGET_BOARD_NOT_FOUND,
+                BatchOperationResultCodes.SOURCE_BOARD_NOT_FOUND,
+            ):
+                code = status.HTTP_404_NOT_FOUND
+            elif first_code in (
+                BatchOperationResultCodes.TARGET_BOARD_NO_PERMISSION,
+                BatchOperationResultCodes.SOURCE_BOARD_NO_PERMISSION,
+            ):
+                code = status.HTTP_403_FORBIDDEN
+        return Response(self._build_result(operation, results), status=code)
 
-        data = serializer.validated_data
-        pin_ids = data["pin_ids"]
+    # ------------------------------------------------------------------
+    # 可复用执行框架
+    #  操作 = preflight(ctx) -> None (失败时填充 results)
+    #       + for_each(ctx, pin) -> (success_code, error_code, extra_msg | None)
+    #       + finally build_response
+    #  权限检查分两级：
+    #    - ACCESS 级：仅验证是否可见（_can_access_pin）
+    #    - OWNER 级：验证是否是 Pin 所有者（submitter == user）
+    # ------------------------------------------------------------------
+    def _run_batch_operation(
+        self,
+        request,
+        serializer_cls,
+        operation_name,
+        preflight_fn,
+        per_pin_fn,
+        permission_level="ACCESS",
+    ):
+        """模板方法：执行批量操作的公共流程
+
+        Args:
+            request: Django request 对象
+            serializer_cls: 请求参数序列化器
+            operation_name: 操作标识（写入结果结构的 operation 字段）
+            preflight_fn(ctx) -> None:
+                执行前检查（如 Board 权限校验）。
+                遇到需要立刻终止的错误时，向 ctx["results"] 写入结果，
+                ctx["abort"] = True，然后 return。
+            per_pin_fn(ctx, pin) -> (success_code, error_code, extra_msg) | None:
+                Pin 存在且通过权限检查后，被调用执行具体操作。
+                返回 tuple(success_code, operation_failed_code, None/extra_msg)
+                操作成功返回 (success_code, None, None)
+                有特殊业务错误返回 (None, special_code, extra_msg)
+                返回 None 表示跳过（上层自行处理）
+            permission_level: "ACCESS" | "OWNER" | None
+                - "ACCESS": 使用 _can_access_pin (私有Pin仅所有者可见)
+                - "OWNER": 验证 submitter == user
+                - None: 不做 Pin 级权限检查
+        """
+        ctx = {
+            "request": request,
+            "user": request.user,
+            "serializer": serializer_cls(data=request.data),
+            "results": [],
+            "abort": False,
+            "data": None,
+            "pin_ids": [],
+            "pin_map": {},
+            "extra": {},
+        }
+
+        if not ctx["serializer"].is_valid():
+            return Response(
+                ctx["serializer"].errors,
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        ctx["data"] = ctx["serializer"].validated_data
+        ctx["pin_ids"] = ctx["data"]["pin_ids"]
+
+        # --- 1) 前置检查（Board 相关校验） -----------------------------
+        preflight_fn(ctx)
+        if ctx["abort"]:
+            any_success = any(r["success"] for r in ctx["results"])
+            if any_success:
+                resp_status = status.HTTP_200_OK
+            elif ctx["results"]:
+                first_code = ctx["results"][0].get("code")
+                if first_code in (
+                    BatchOperationResultCodes.TARGET_BOARD_NOT_FOUND,
+                    BatchOperationResultCodes.SOURCE_BOARD_NOT_FOUND,
+                ):
+                    resp_status = status.HTTP_404_NOT_FOUND
+                else:
+                    resp_status = status.HTTP_403_FORBIDDEN
+            else:
+                resp_status = status.HTTP_400_BAD_REQUEST
+            return Response(
+                self._build_result(operation_name, ctx["results"]),
+                status=resp_status,
+            )
+
+        # --- 2) 批量加载 Pin ------------------------------------------
+        pins = Pin.objects.filter(id__in=ctx["pin_ids"])
+        ctx["pin_map"] = {p.id: p for p in pins}
+
+        # --- 3) 逐项执行循环 ------------------------------------------
+        for pin_id in ctx["pin_ids"]:
+            pin = ctx["pin_map"].get(pin_id)
+
+            # 3a) Pin 不存在
+            if pin is None:
+                ctx["results"].append(
+                    self._make_result(
+                        pin_id, False,
+                        BatchOperationResultCodes.PIN_NOT_FOUND,
+                    )
+                )
+                continue
+
+            # 3b) Pin 级权限检查
+            if permission_level == "ACCESS":
+                if not self._can_access_pin(ctx["user"], pin):
+                    ctx["results"].append(
+                        self._make_result(
+                            pin_id, False,
+                            BatchOperationResultCodes.PIN_NO_PERMISSION_ACCESS,
+                        )
+                    )
+                    continue
+            elif permission_level == "OWNER":
+                if pin.submitter != ctx["user"]:
+                    ctx["results"].append(
+                        self._make_result(
+                            pin_id, False,
+                            BatchOperationResultCodes.PIN_NO_PERMISSION_OWNER,
+                        )
+                    )
+                    continue
+
+            # 3c) 业务钩子
+            try:
+                outcome = per_pin_fn(ctx, pin)
+                if outcome is None:
+                    continue
+
+                success_code, error_code, extra_msg = outcome
+                if success_code is not None:
+                    ctx["results"].append(
+                        self._make_result(
+                            pin_id, True, success_code, extra_msg,
+                        )
+                    )
+                else:
+                    ctx["results"].append(
+                        self._make_result(
+                            pin_id, False, error_code, extra_msg,
+                        )
+                    )
+            except Exception as exc:
+                ctx["results"].append(
+                    self._make_result(
+                        pin_id, False,
+                        BatchOperationResultCodes.OPERATION_FAILED,
+                        str(exc),
+                    )
+                )
+
+        # --- 4) 组装响应 ---------------------------------------------
+        return self._build_response(operation_name, ctx["results"])
+
+    # ------------------------------------------------------------------
+    # 具体操作: Move
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _move_preflight(ctx, view):
+        data = ctx["data"]
+        user = ctx["user"]
+        pin_ids = ctx["pin_ids"]
         source_board_id = data.get("source_board_id")
         target_board_id = data["target_board_id"]
-        user = request.user
-
-        results = []
 
         try:
             target_board = Board.objects.get(id=target_board_id)
         except Board.DoesNotExist:
             for pid in pin_ids:
-                results.append(
-                    self._make_result(
+                ctx["results"].append(
+                    view._make_result(
                         pid, False,
                         BatchOperationResultCodes.TARGET_BOARD_NOT_FOUND,
                     )
                 )
-            return Response(
-                self._build_result("move", results),
-                status=status.HTTP_404_NOT_FOUND,
-            )
+            ctx["abort"] = True
+            return
 
-        if not self._is_board_owner(user, target_board):
+        if not view._is_board_owner(user, target_board):
             for pid in pin_ids:
-                results.append(
-                    self._make_result(
+                ctx["results"].append(
+                    view._make_result(
                         pid, False,
                         BatchOperationResultCodes.TARGET_BOARD_NO_PERMISSION,
                     )
                 )
-            return Response(
-                self._build_result("move", results),
-                status=status.HTTP_403_FORBIDDEN,
-            )
+            ctx["abort"] = True
+            return
 
+        ctx["extra"]["target_board"] = target_board
         source_board = None
         if source_board_id:
             try:
                 source_board = Board.objects.get(id=source_board_id)
-                if not self._is_board_owner(user, source_board):
+                if not view._is_board_owner(user, source_board):
                     for pid in pin_ids:
-                        results.append(
-                            self._make_result(
+                        ctx["results"].append(
+                            view._make_result(
                                 pid, False,
                                 BatchOperationResultCodes.SOURCE_BOARD_NO_PERMISSION,
                             )
                         )
-                    return Response(
-                        self._build_result("move", results),
-                        status=status.HTTP_403_FORBIDDEN,
-                    )
+                    ctx["abort"] = True
+                    return
             except Board.DoesNotExist:
                 for pid in pin_ids:
-                    results.append(
-                        self._make_result(
+                    ctx["results"].append(
+                        view._make_result(
                             pid, False,
                             BatchOperationResultCodes.SOURCE_BOARD_NOT_FOUND,
                         )
                     )
-                return Response(
-                    self._build_result("move", results),
-                    status=status.HTTP_404_NOT_FOUND,
-                )
+                ctx["abort"] = True
+                return
+        ctx["extra"]["source_board"] = source_board
 
-        pins = Pin.objects.filter(id__in=pin_ids)
-        pin_map = {p.id: p for p in pins}
+    @staticmethod
+    def _move_per_pin(view, ctx, pin):
+        target_board = ctx["extra"]["target_board"]
+        source_board = ctx["extra"].get("source_board")
 
-        for pin_id in pin_ids:
-            pin = pin_map.get(pin_id)
-            if pin is None:
-                results.append(
-                    self._make_result(
-                        pin_id, False,
-                        BatchOperationResultCodes.PIN_NOT_FOUND,
-                    )
-                )
-                continue
+        with transaction.atomic():
+            if source_board:
+                source_board.pins.remove(pin)
+            target_board.pins.add(pin)
+        return BatchOperationResultCodes.SUCCESS_MOVE, None, None
 
-            if not self._can_access_pin(user, pin):
-                results.append(
-                    self._make_result(
-                        pin_id, False,
-                        BatchOperationResultCodes.PIN_NO_PERMISSION_ACCESS,
-                    )
-                )
-                continue
+    @action(detail=False, methods=["post"], url_path="move-pins")
+    def move_pins(self, request):
+        return self._run_batch_operation(
+            request=request,
+            serializer_cls=api.BatchMovePinsSerializer,
+            operation_name="move",
+            preflight_fn=lambda ctx: self._move_preflight(ctx, self),
+            per_pin_fn=lambda ctx, pin: self._move_per_pin(self, ctx, pin),
+            permission_level="ACCESS",
+        )
 
-            try:
-                with transaction.atomic():
-                    if source_board:
-                        source_board.pins.remove(pin)
-                    target_board.pins.add(pin)
-                    results.append(
-                        self._make_result(
-                            pin_id, True,
-                            BatchOperationResultCodes.SUCCESS_MOVE,
-                        )
-                    )
-            except Exception as e:
-                results.append(
-                    self._make_result(
-                        pin_id, False,
-                        BatchOperationResultCodes.OPERATION_FAILED,
-                        f"Failed to move: {str(e)}",
-                    )
-                )
-
-        response_status = status.HTTP_200_OK if any(
-            r["success"] for r in results
-        ) else status.HTTP_400_BAD_REQUEST
-        return Response(self._build_result("move", results), status=response_status)
-
-    @action(detail=False, methods=["post"], url_path="copy-pins")
-    def copy_pins(self, request):
-        serializer = api.BatchCopyPinsSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        data = serializer.validated_data
-        pin_ids = data["pin_ids"]
+    # ------------------------------------------------------------------
+    # 具体操作: Copy (含已存在检测)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _copy_preflight(ctx, view):
+        data = ctx["data"]
+        user = ctx["user"]
+        pin_ids = ctx["pin_ids"]
         target_board_id = data["target_board_id"]
-        user = request.user
-
-        results = []
 
         try:
             target_board = Board.objects.get(id=target_board_id)
         except Board.DoesNotExist:
             for pid in pin_ids:
-                results.append(
-                    self._make_result(
+                ctx["results"].append(
+                    view._make_result(
                         pid, False,
                         BatchOperationResultCodes.TARGET_BOARD_NOT_FOUND,
                     )
                 )
-            return Response(
-                self._build_result("copy", results),
-                status=status.HTTP_404_NOT_FOUND,
-            )
+            ctx["abort"] = True
+            return
 
-        if not self._is_board_owner(user, target_board):
+        if not view._is_board_owner(user, target_board):
             for pid in pin_ids:
-                results.append(
-                    self._make_result(
+                ctx["results"].append(
+                    view._make_result(
                         pid, False,
                         BatchOperationResultCodes.TARGET_BOARD_NO_PERMISSION,
                     )
                 )
-            return Response(
-                self._build_result("copy", results),
-                status=status.HTTP_403_FORBIDDEN,
-            )
+            ctx["abort"] = True
+            return
 
-        pins = Pin.objects.filter(id__in=pin_ids)
-        pin_map = {p.id: p for p in pins}
+        ctx["extra"]["target_board"] = target_board
+        ctx["extra"]["existing_pin_ids"] = set(
+            target_board.pins.values_list("id", flat=True),
+        )
 
-        for pin_id in pin_ids:
-            pin = pin_map.get(pin_id)
-            if pin is None:
-                results.append(
-                    self._make_result(
-                        pin_id, False,
-                        BatchOperationResultCodes.PIN_NOT_FOUND,
-                    )
-                )
-                continue
+    @staticmethod
+    def _copy_per_pin(view, ctx, pin):
+        target_board = ctx["extra"]["target_board"]
+        existing = ctx["extra"]["existing_pin_ids"]
 
-            if not self._can_access_pin(user, pin):
-                results.append(
-                    self._make_result(
-                        pin_id, False,
-                        BatchOperationResultCodes.PIN_NO_PERMISSION_ACCESS,
-                    )
-                )
-                continue
+        if pin.id in existing:
+            return None, BatchOperationResultCodes.PIN_ALREADY_IN_BOARD, None
 
-            try:
-                with transaction.atomic():
-                    target_board.pins.add(pin)
-                    results.append(
-                        self._make_result(
-                            pin_id, True,
-                            BatchOperationResultCodes.SUCCESS_COPY,
-                        )
-                    )
-            except Exception as e:
-                results.append(
-                    self._make_result(
-                        pin_id, False,
-                        BatchOperationResultCodes.OPERATION_FAILED,
-                        f"Failed to copy: {str(e)}",
-                    )
-                )
+        with transaction.atomic():
+            target_board.pins.add(pin)
+        return BatchOperationResultCodes.SUCCESS_COPY, None, None
 
-        response_status = status.HTTP_200_OK if any(
-            r["success"] for r in results
-        ) else status.HTTP_400_BAD_REQUEST
-        return Response(self._build_result("copy", results), status=response_status)
+    @action(detail=False, methods=["post"], url_path="copy-pins")
+    def copy_pins(self, request):
+        return self._run_batch_operation(
+            request=request,
+            serializer_cls=api.BatchCopyPinsSerializer,
+            operation_name="copy",
+            preflight_fn=lambda ctx: self._copy_preflight(ctx, self),
+            per_pin_fn=lambda ctx, pin: self._copy_per_pin(self, ctx, pin),
+            permission_level="ACCESS",
+        )
+
+    # ------------------------------------------------------------------
+    # 具体操作: Delete
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _delete_preflight(ctx, view):
+        pass
+
+    @staticmethod
+    def _delete_per_pin(view, ctx, pin):
+        with transaction.atomic():
+            pin.delete()
+        return BatchOperationResultCodes.SUCCESS_DELETE, None, None
 
     @action(detail=False, methods=["post"], url_path="delete-pins")
     def delete_pins(self, request):
-        serializer = api.BatchDeletePinsSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return self._run_batch_operation(
+            request=request,
+            serializer_cls=api.BatchDeletePinsSerializer,
+            operation_name="delete",
+            preflight_fn=lambda ctx: self._delete_preflight(ctx, self),
+            per_pin_fn=lambda ctx, pin: self._delete_per_pin(self, ctx, pin),
+            permission_level="OWNER",
+        )
 
-        data = serializer.validated_data
-        pin_ids = data["pin_ids"]
-        user = request.user
-
-        results = []
-        pins = Pin.objects.filter(id__in=pin_ids)
-        pin_map = {p.id: p for p in pins}
-
-        for pin_id in pin_ids:
-            pin = pin_map.get(pin_id)
-            if pin is None:
-                results.append(
-                    self._make_result(
-                        pin_id, False,
-                        BatchOperationResultCodes.PIN_NOT_FOUND,
-                    )
-                )
-                continue
-
-            if pin.submitter != user:
-                results.append(
-                    self._make_result(
-                        pin_id, False,
-                        BatchOperationResultCodes.PIN_NO_PERMISSION_OWNER,
-                    )
-                )
-                continue
-
-            try:
-                with transaction.atomic():
-                    pin.delete()
-                    results.append(
-                        self._make_result(
-                            pin_id, True,
-                            BatchOperationResultCodes.SUCCESS_DELETE,
-                        )
-                    )
-            except Exception as e:
-                results.append(
-                    self._make_result(
-                        pin_id, False,
-                        BatchOperationResultCodes.OPERATION_FAILED,
-                        f"Failed to delete: {str(e)}",
-                    )
-                )
-
-        response_status = status.HTTP_200_OK if any(
-            r["success"] for r in results
-        ) else status.HTTP_400_BAD_REQUEST
-        return Response(self._build_result("delete", results), status=response_status)
-
-    @action(detail=False, methods=["post"], url_path="update-privacy")
-    def update_privacy(self, request):
-        serializer = api.BatchUpdatePrivacySerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        data = serializer.validated_data
-        pin_ids = data["pin_ids"]
-        private = data["private"]
-        user = request.user
-
-        results = []
-        pins = Pin.objects.filter(id__in=pin_ids)
-        pin_map = {p.id: p for p in pins}
-
-        success_code = (
+    # ------------------------------------------------------------------
+    # 具体操作: Update Privacy
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _privacy_preflight(ctx, view):
+        private = ctx["data"]["private"]
+        ctx["extra"]["success_code"] = (
             BatchOperationResultCodes.SUCCESS_PRIVACY_PRIVATE
             if private
             else BatchOperationResultCodes.SUCCESS_PRIVACY_PUBLIC
         )
 
-        for pin_id in pin_ids:
-            pin = pin_map.get(pin_id)
-            if pin is None:
-                results.append(
-                    self._make_result(
-                        pin_id, False,
-                        BatchOperationResultCodes.PIN_NOT_FOUND,
-                    )
-                )
-                continue
+    @staticmethod
+    def _privacy_per_pin(view, ctx, pin):
+        private = ctx["data"]["private"]
+        with transaction.atomic():
+            pin.private = private
+            pin.save(update_fields=["private"])
+        return ctx["extra"]["success_code"], None, None
 
-            if pin.submitter != user:
-                results.append(
-                    self._make_result(
-                        pin_id, False,
-                        BatchOperationResultCodes.PIN_NO_PERMISSION_OWNER,
-                    )
-                )
-                continue
-
-            try:
-                with transaction.atomic():
-                    pin.private = private
-                    pin.save(update_fields=["private"])
-                    results.append(
-                        self._make_result(
-                            pin_id, True,
-                            success_code,
-                        )
-                    )
-            except Exception as e:
-                results.append(
-                    self._make_result(
-                        pin_id, False,
-                        BatchOperationResultCodes.OPERATION_FAILED,
-                        f"Failed to update privacy: {str(e)}",
-                    )
-                )
-
-        response_status = status.HTTP_200_OK if any(
-            r["success"] for r in results
-        ) else status.HTTP_400_BAD_REQUEST
-        return Response(self._build_result("privacy", results), status=response_status)
+    @action(detail=False, methods=["post"], url_path="update-privacy")
+    def update_privacy(self, request):
+        return self._run_batch_operation(
+            request=request,
+            serializer_cls=api.BatchUpdatePrivacySerializer,
+            operation_name="privacy",
+            preflight_fn=lambda ctx: self._privacy_preflight(ctx, self),
+            per_pin_fn=lambda ctx, pin: self._privacy_per_pin(self, ctx, pin),
+            permission_level="OWNER",
+        )
 
 
 drf_router = routers.DefaultRouter()

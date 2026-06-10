@@ -126,6 +126,7 @@
         "target_board_no_permission": "No permission to modify target board",
         "source_board_not_found": "Source board does not exist",
         "source_board_no_permission": "No permission to modify source board",
-        "operation_failed": "Operation failed"
+        "operation_failed": "Operation failed",
+        "pin_already_in_board": "Pin already exists in the target board"
     }
 }

@@ -126,6 +126,7 @@
     "target_board_no_permission": "无权修改目标画板",
     "source_board_not_found": "源画板不存在",
     "source_board_no_permission": "无权修改源画板",
-    "operation_failed": "操作失败"
-  }
+        "operation_failed": "操作失败",
+        "pin_already_in_board": "Pin 已存在于目标画板"
+    }
 }

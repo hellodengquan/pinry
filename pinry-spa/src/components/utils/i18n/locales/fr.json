@@ -126,6 +126,7 @@
         "target_board_no_permission": "Aucune autorisation sur le tableau cible",
         "source_board_not_found": "Tableau source introuvable",
         "source_board_no_permission": "Aucune autorisation sur le tableau source",
-        "operation_failed": "Échec de l'opération"
+        "operation_failed": "Échec de l'opération",
+        "pin_already_in_board": "Fiche déjà présente dans le tableau cible"
     }
 }
