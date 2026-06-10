@@ -5,6 +5,7 @@ import Pins4Tag from '../views/Pins4Tag.vue';
 import Pins4User from '../views/Pins4User.vue';
 import Pins4Board from '../views/Pins4Board.vue';
 import Pins4Id from '../views/Pins4Id.vue';
+import Pins4Share from '../views/Pins4Share.vue';
 import Boards4User from '../views/Boards4User.vue';
 import Profile4User from '../views/Profile4User.vue';
 import PinCreate from '../views/PinCreate.vue';
@@ -33,6 +34,11 @@ const routes = [
     path: '/pins/boards/:boardId',
     name: 'board',
     component: Pins4Board,
+  },
+  {
+    path: '/share/:token',
+    name: 'share-board',
+    component: Pins4Share,
   },
   {
     path: '/pins/:pinId',

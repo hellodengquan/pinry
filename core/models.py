@@ -1,12 +1,15 @@
 import PIL.Image
 import requests
+import secrets
 
 from io import BytesIO
+from datetime import timedelta
 
 from django.conf import settings
 from django.core.files.uploadedfile import InMemoryUploadedFile
 from django.db import models
 from django.dispatch import receiver
+from django.utils import timezone
 
 from django_images.models import Image as BaseImage, Thumbnail
 from taggit.managers import TaggableManager
@@ -120,3 +123,78 @@ def delete_pin_images(sender, instance, **kwargs):
         instance.image.delete()
     except Image.DoesNotExist:
         pass
+
+
+class BoardShareTokenManager(models.Manager):
+    def create_token(self, board, creator, expires_days=None):
+        token = secrets.token_urlsafe(32)
+        expires_at = None
+        if expires_days is not None:
+            expires_at = timezone.now() + timedelta(days=expires_days)
+        return self.create(
+            board=board,
+            token=token,
+            created_by=creator,
+            expires_at=expires_at,
+        )
+
+
+class BoardShareToken(models.Model):
+    class Meta:
+        ordering = ('-created_at',)
+
+    board = models.ForeignKey(
+        Board,
+        on_delete=models.CASCADE,
+        related_name='share_tokens',
+    )
+    token = models.CharField(
+        max_length=255,
+        unique=True,
+        db_index=True,
+    )
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='created_share_tokens',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    is_revoked = models.BooleanField(default=False)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    last_accessed_at = models.DateTimeField(null=True, blank=True)
+    access_count = models.PositiveIntegerField(default=0)
+
+    objects = BoardShareTokenManager()
+
+    @property
+    def is_valid(self):
+        if self.is_revoked:
+            return False
+        if self.expires_at and self.expires_at < timezone.now():
+            return False
+        return True
+
+    def revoke(self):
+        self.is_revoked = True
+        self.revoked_at = timezone.now()
+        self.save()
+
+    def record_access(self):
+        self.last_accessed_at = timezone.now()
+        self.access_count += 1
+        self.save()
+
+    def regenerate(self, expires_days=None):
+        self.token = secrets.token_urlsafe(32)
+        self.created_at = timezone.now()
+        self.is_revoked = False
+        self.revoked_at = None
+        self.access_count = 0
+        self.last_accessed_at = None
+        if expires_days is not None:
+            self.expires_at = timezone.now() + timedelta(days=expires_days)
+        else:
+            self.expires_at = None
+        self.save()
+        return self

@@ -4,10 +4,10 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from taggit.models import Tag
 
-from core.models import Image, Board
+from core.models import Image, Board, BoardShareToken
 from core.models import Pin
 from django_images.models import Thumbnail
-from users.serializers import UserSerializer
+from users.serializers import UserSerializer, PublicUserSerializer
 from users.models import User
 
 
@@ -273,3 +273,170 @@ class TagAutoCompleteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Tag
         fields = ('name', )
+
+
+class AnonymousPinSerializer(serializers.HyperlinkedModelSerializer):
+    class Meta:
+        model = Pin
+        fields = (
+            settings.DRF_URL_FIELD_NAME,
+            "id",
+            "url",
+            "description",
+            "image",
+            "tags",
+            "published",
+            "submitter_username",
+        )
+
+    tags = TagSerializer(
+        many=True,
+        source="tag_list",
+        required=False,
+    )
+    image = ImageSerializer(required=False, read_only=True)
+    submitter_username = serializers.SerializerMethodField(read_only=True)
+
+    def get_submitter_username(self, instance):
+        return instance.submitter.username
+
+
+class AnonymousBoardSerializer(serializers.HyperlinkedModelSerializer):
+    class Meta:
+        model = Board
+        fields = (
+            settings.DRF_URL_FIELD_NAME,
+            "id",
+            "name",
+            "total_pins",
+            "cover",
+            "published",
+            "submitter_username",
+        )
+
+    submitter_username = serializers.SerializerMethodField(read_only=True)
+    total_pins = serializers.SerializerMethodField(read_only=True)
+    cover = serializers.SerializerMethodField(read_only=True)
+
+    def get_submitter_username(self, instance):
+        return instance.submitter.username
+
+    def get_total_pins(self, instance):
+        query = instance.pins.filter(private=False)
+        return query.count()
+
+    def get_cover(self, instance: Board) -> dict or None:
+        pin = instance.pins.filter(private=False).first()
+        if pin is None:
+            return None
+        return AnonymousPinSerializer(pin, context=self.context).data
+
+
+class BoardShareTokenSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BoardShareToken
+        fields = (
+            "id",
+            "token",
+            "board_id",
+            "created_at",
+            "expires_at",
+            "is_revoked",
+            "revoked_at",
+            "last_accessed_at",
+            "access_count",
+            "is_valid",
+            "share_url",
+        )
+        read_only_fields = (
+            "id",
+            "token",
+            "board_id",
+            "created_at",
+            "is_revoked",
+            "revoked_at",
+            "last_accessed_at",
+            "access_count",
+            "is_valid",
+            "share_url",
+        )
+
+    is_valid = serializers.SerializerMethodField(read_only=True)
+    share_url = serializers.SerializerMethodField(read_only=True)
+    board_id = serializers.SerializerMethodField(read_only=True)
+
+    def get_board_id(self, instance):
+        return instance.board.id
+
+    def get_is_valid(self, instance):
+        return instance.is_valid
+
+    def get_share_url(self, instance):
+        request = self.context.get('request')
+        if request is None:
+            return f"/share/{instance.token}"
+        return request.build_absolute_uri(f"/share/{instance.token}")
+
+
+class BoardShareTokenCreateSerializer(serializers.Serializer):
+    expires_days = serializers.IntegerField(
+        required=False,
+        min_value=1,
+        max_value=365,
+        allow_null=True,
+        help_text="Number of days until the token expires. Null means never expires.",
+    )
+
+    def create(self, validated_data):
+        request = self.context['request']
+        board = self.context['board']
+        expires_days = validated_data.get('expires_days')
+        return BoardShareToken.objects.create_token(
+            board=board,
+            creator=request.user,
+            expires_days=expires_days,
+        )
+
+
+class BoardShareTokenRegenerateSerializer(serializers.Serializer):
+    expires_days = serializers.IntegerField(
+        required=False,
+        min_value=1,
+        max_value=365,
+        allow_null=True,
+    )
+
+    def update(self, instance, validated_data):
+        expires_days = validated_data.get('expires_days')
+        return instance.regenerate(expires_days=expires_days)
+
+
+class AnonymousBoardWithPinsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Board
+        fields = (
+            "id",
+            "name",
+            "total_pins",
+            "cover",
+            "published",
+            "submitter_username",
+        )
+
+    submitter_username = serializers.SerializerMethodField(read_only=True)
+    total_pins = serializers.SerializerMethodField(read_only=True)
+    cover = serializers.SerializerMethodField(read_only=True)
+
+    def get_submitter_username(self, instance):
+        return instance.submitter.username
+
+    def get_total_pins(self, instance):
+        query = instance.pins.filter(private=False)
+        return query.count()
+
+    def get_cover(self, instance: Board) -> dict or None:
+        pin = instance.pins.filter(private=False).first()
+        if pin is None:
+            return None
+        return AnonymousPinSerializer(pin, context=self.context).data
+

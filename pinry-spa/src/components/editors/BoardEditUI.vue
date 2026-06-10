@@ -1,6 +1,13 @@
 <template>
   <div class="editor">
     <div class="editor-buttons">
+      <span class="icon-container" @click="shareBoard">
+         <b-icon
+           type="is-light"
+           icon="share-variant"
+           custom-size="mdi-24px">
+         </b-icon>
+      </span>
       <span class="icon-container" @click="deleteBoard">
          <b-icon
            type="is-light"
@@ -43,6 +50,12 @@ export default {
         this,
         this.board,
         this.onBoardSaved,
+      );
+    },
+    shareBoard() {
+      modals.openBoardShare(
+        this,
+        this.board,
       );
     },
     deleteBoard() {

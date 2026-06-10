@@ -1,5 +1,29 @@
 <template>
   <div class="p-header">
+    <div v-if="isShareMode" class="share-banner">
+      <div class="container share-banner-content">
+        <div class="share-banner-left">
+          <b-icon icon="share-variant" size="is-medium"></b-icon>
+          &nbsp;
+          <span class="share-banner-text">
+            {{ $t("viewingSharedBoard") }}
+            <strong v-if="shareBoard">{{ shareBoard.name }}</strong>
+          </span>
+        </div>
+        <div class="share-banner-right">
+          <router-link :to="{ name: 'home' }" class="button is-light is-small">
+            <b-icon icon="home" size="is-small"></b-icon>
+            &nbsp;{{ $t("goToHomePage") }}
+          </router-link>
+          <a
+            v-show="!user.loggedIn"
+            v-on:click="logIn"
+            class="button is-primary is-small">
+            {{ $t("logInLink") }}
+          </a>
+        </div>
+      </div>
+    </div>
     <nav class="navbar" role="navigation" aria-label="main navigation">
       <div class="container">
         <div class="navbar-brand">
@@ -21,7 +45,7 @@
               {{ $t("bookmarkletLink") }}
             </a>
             <div
-              v-if="user.loggedIn"
+              v-if="user.loggedIn && !isShareMode"
               class="navbar-item has-dropdown is-hoverable">
               <a class="navbar-link">
                 {{ $t("createLink") }}
@@ -40,7 +64,7 @@
               </div>
             </div>
             <div
-              v-if="user.loggedIn"
+              v-if="user.loggedIn && !isShareMode"
               class="navbar-item has-dropdown is-hoverable">
               <a class="navbar-link">
                 {{ $t("myLink") }}
@@ -106,7 +130,7 @@
                 </a>
               </div>
             </div>
-            <div class="navbar-item">
+            <div v-if="!isShareMode" class="navbar-item">
               <div class="buttons">
                 <a
                   @click="signUp"
@@ -142,6 +166,16 @@ import modals from './modals';
 
 export default {
   name: 'p-header',
+  props: {
+    isShareMode: {
+      type: Boolean,
+      default: false,
+    },
+    shareBoard: {
+      type: Object,
+      default: null,
+    },
+  },
   data() {
     return {
       active: false,
@@ -216,6 +250,54 @@ export default {
 };
 </script>
 
-<style scoped>
+<style scoped lang="scss">
+.share-banner {
+  background: linear-gradient(90deg, #3273dc, #2962cc);
+  color: white;
+  padding: 0.5rem 0;
 
+  .share-banner-content {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+
+  .share-banner-left {
+    display: flex;
+    align-items: center;
+  }
+
+  .share-banner-text {
+    font-size: 0.9rem;
+
+    strong {
+      color: #fff;
+    }
+  }
+
+  .share-banner-right {
+    display: flex;
+    gap: 0.5rem;
+  }
+}
+
+@media (max-width: 768px) {
+  .share-banner {
+    .share-banner-content {
+      flex-direction: column;
+      align-items: stretch;
+      text-align: center;
+    }
+
+    .share-banner-left {
+      justify-content: center;
+    }
+
+    .share-banner-right {
+      justify-content: center;
+    }
+  }
+}
 </style>

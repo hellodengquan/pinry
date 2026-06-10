@@ -38,23 +38,33 @@
                 <div class="pin-footer">
                   <div class="description" v-show="item.description" v-html="niceLinks(item.description)"></div>
                   <div class="details">
-                    <div class="is-pulled-left">
+                    <div class="is-pulled-left" v-if="item.avatar">
                       <img class="avatar" :src="item.avatar" alt="">
                     </div>
                     <div class="pin-info">
                       <span class="dim">{{ $t("pinnedByInfo") }}&nbsp;
                         <span>
-                          <router-link
-                            :to="{ name: 'user', params: {user: item.author} }">
+                          <template v-if="!isShareMode">
+                            <router-link
+                              :to="{ name: 'user', params: {user: item.author} }">
+                              {{ item.author }}
+                            </router-link>
+                          </template>
+                          <template v-else>
                             {{ item.author }}
-                          </router-link>
+                          </template>
                         </span>
                         <template v-if="item.tags.length > 0">
                           &nbsp;in&nbsp;
                           <template v-for="tag in item.tags">
                             <span v-bind:key="tag" class="pin-tag">
-                              <router-link :to="{ name: 'tag', params: {tag: tag} }"
-                                           params="{tag: tag}">{{ tag }}</router-link>
+                              <template v-if="!isShareMode">
+                                <router-link :to="{ name: 'tag', params: {tag: tag} }"
+                                             params="{tag: tag}">{{ tag }}</router-link>
+                              </template>
+                              <template v-else>
+                                {{ tag }}
+                              </template>
                             </span>
                           </template>
                         </template>
@@ -86,16 +96,13 @@ import bus from './utils/bus';
 import EditorUI from './editors/PinEditorUI.vue';
 import niceLinks from './utils/niceLinks';
 
-function createImageItem(pin) {
+function createImageItem(pin, isShareMode = false) {
   const image = {};
   image.url = pinHandler.escapeUrl(pin.image.thumbnail.image);
   image.id = pin.id;
-  image.owner_id = pin.submitter.id;
   image.private = pin.private;
   image.description = pin.description;
   image.tags = pin.tags;
-  image.author = pin.submitter.username;
-  image.avatar = `//gravatar.com/avatar/${pin.submitter.gravatar}`;
   image.large_image_url = pinHandler.escapeUrl(pin.image.image);
   image.original_image_url = pin.url;
   image.referer = pin.referer;
@@ -105,6 +112,17 @@ function createImageItem(pin) {
     height: `${pin.image.thumbnail.height}px`,
   };
   image.class = {};
+
+  if (isShareMode) {
+    image.author = pin.submitter_username || 'Anonymous';
+    image.avatar = null;
+    image.owner_id = null;
+  } else {
+    image.owner_id = pin.submitter.id;
+    image.author = pin.submitter.username;
+    image.avatar = `//gravatar.com/avatar/${pin.submitter.gravatar}`;
+  }
+
   return image;
 }
 
@@ -146,8 +164,17 @@ export default {
           tagFilter: null,
           userFilter: null,
           boardFilter: null,
+          shareTokenFilter: null,
         };
       },
+    },
+    isShareMode: {
+      type: Boolean,
+      default: false,
+    },
+    shareToken: {
+      type: String,
+      default: null,
     },
   },
   watch: {
@@ -157,6 +184,9 @@ export default {
   },
   methods: {
     shouldShowEdit(id) {
+      if (this.isShareMode) {
+        return false;
+      }
       if (!this.editorMeta.user.loggedIn) {
         return false;
       }
@@ -189,7 +219,7 @@ export default {
       const blocks = [];
       results.forEach(
         (pin) => {
-          const item = createImageItem(pin);
+          const item = createImageItem(pin, this.isShareMode);
           blocks.push(
             item,
           );
@@ -204,6 +234,7 @@ export default {
           component: PinPreview,
           props: {
             pinItem,
+            isShareMode: this.isShareMode,
           },
           scroll: 'keep',
           customClass: 'pin-preview-at-home',
@@ -255,7 +286,12 @@ export default {
       }
       this.status.loading = true;
       let promise;
-      if (this.pinFilters.tagFilter) {
+      if (this.pinFilters.shareTokenFilter) {
+        promise = API.BoardShare.getPins(
+          this.pinFilters.shareTokenFilter,
+          this.status.offset,
+        );
+      } else if (this.pinFilters.tagFilter) {
         promise = API.fetchPins(this.status.offset, this.pinFilters.tagFilter, null, null);
       } else if (this.pinFilters.userFilter) {
         promise = API.fetchPins(this.status.offset, null, this.pinFilters.userFilter, null);
@@ -285,7 +321,15 @@ export default {
           this.status.hasNext = !(next === null);
           this.status.loading = false;
         },
-        () => { this.status.loading = false; },
+        (error) => {
+          this.status.loading = false;
+          if (this.isShareMode && error.response && error.response.status === 404) {
+            this.$buefy.toast.open({
+              type: 'is-danger',
+              message: error.response.data.detail || this.$t('shareLinkInvalidOrRevoked'),
+            });
+          }
+        },
       );
     },
     niceLinks,

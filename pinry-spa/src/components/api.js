@@ -65,6 +65,35 @@ const Board = {
     const url = `${API_PREFIX}boards/${boardId}/`;
     return axios.delete(url);
   },
+  listShareTokens(boardId) {
+    const url = `${API_PREFIX}boards/${boardId}/share-tokens/`;
+    return axios.get(url);
+  },
+  createShareToken(boardId, expiresDays = null) {
+    const url = `${API_PREFIX}boards/${boardId}/share-tokens/create/`;
+    const data = expiresDays ? { expires_days: expiresDays } : {};
+    return axios.post(url, data);
+  },
+  revokeShareToken(boardId, tokenId) {
+    const url = `${API_PREFIX}boards/${boardId}/share-tokens/${tokenId}/revoke/`;
+    return axios.post(url, {});
+  },
+  regenerateShareToken(boardId, tokenId, expiresDays = null) {
+    const url = `${API_PREFIX}boards/${boardId}/share-tokens/${tokenId}/regenerate/`;
+    const data = expiresDays ? { expires_days: expiresDays } : {};
+    return axios.post(url, data);
+  },
+};
+
+const BoardShare = {
+  get(token) {
+    const url = `${API_PREFIX}board-share/${token}/`;
+    return axios.get(url);
+  },
+  getPins(token, offset = 0, limit = 30) {
+    const url = `${API_PREFIX}board-share/${token}/pins/`;
+    return axios.get(url, { params: { offset, limit } });
+  },
 };
 
 const Pin = {
@@ -283,6 +312,7 @@ export default {
   Tag,
   Pin,
   Board,
+  BoardShare,
   fetchPin,
   fetchPins,
   fetchBoardForUser,

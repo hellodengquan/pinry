@@ -12,7 +12,7 @@
                 <p class="description title" v-html="niceLinks(pinItem.description)"></p>
             </div>
             <div class="media">
-              <div class="media-left">
+              <div class="media-left" v-if="pinItem.avatar">
                 <figure class="image is-48x48">
                   <img :src="pinItem.avatar" alt="Image">
                 </figure>
@@ -45,6 +45,7 @@
                     </b-button>
                   </a>
                   <b-button
+                      v-if="!isShareMode"
                       @click="closeAndGoTo"
                       class="meta-link"
                       type="is-success">
@@ -64,7 +65,16 @@ import niceLinks from './utils/niceLinks';
 
 export default {
   name: 'PinPreview',
-  props: ['pinItem'],
+  props: {
+    pinItem: {
+      type: Object,
+      required: true,
+    },
+    isShareMode: {
+      type: Boolean,
+      default: false,
+    },
+  },
   methods: {
     closeAndGoTo() {
       this.$parent.close();

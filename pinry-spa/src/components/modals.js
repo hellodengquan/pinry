@@ -2,6 +2,7 @@ import PinCreateModal from './pin_edit/PinCreateModal.vue';
 import LoginForm from './LoginForm.vue';
 import SignUpForm from './SignUpForm.vue';
 import BoardEdit from './BoardEdit.vue';
+import BoardShareUI from './editors/BoardShareUI.vue';
 import Add2Board from './pin_edit/Add2Board.vue';
 
 
@@ -61,6 +62,19 @@ function openBoardEdit(vm, board, onSaved) {
   );
 }
 
+function openBoardShare(vm, board) {
+  vm.$buefy.modal.open(
+    {
+      parent: vm,
+      component: BoardShareUI,
+      props: {
+        board,
+      },
+      hasModalCard: true,
+    },
+  );
+}
+
 function openLogin(vm, onSucceed) {
   vm.$buefy.modal.open({
     parent: vm,
@@ -86,6 +100,7 @@ function openSignUp(vm, onSignUpSucceed) {
 export default {
   openBoardCreate,
   openBoardEdit,
+  openBoardShare,
   openAdd2Board,
   openPinEdit,
   openLogin,
