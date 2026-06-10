@@ -22,6 +22,10 @@ class Plugin:
             self.process_image_pre_create(event)
         elif event_type == EventType.IMAGE_POST_CREATE:
             self.process_image_post_create(event)
+        elif event_type == EventType.IMAGE_PRE_DELETE:
+            self.process_image_pre_delete(event)
+        elif event_type == EventType.IMAGE_POST_DELETE:
+            self.process_image_post_delete(event)
         elif event_type == EventType.THUMBNAIL_PRE_CREATE:
             self.process_thumbnail_pre_create(event)
         elif event_type == EventType.THUMBNAIL_POST_CREATE:
@@ -70,6 +74,12 @@ class Plugin:
         pass
 
     def process_image_post_create(self, event: Event):
+        pass
+
+    def process_image_pre_delete(self, event: Event):
+        pass
+
+    def process_image_post_delete(self, event: Event):
         pass
 
     def process_thumbnail_pre_create(self, event: Event):

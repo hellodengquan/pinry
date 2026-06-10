@@ -14,8 +14,10 @@ _plugin_instances = []
 
 LEGACY_METHOD_MAP = {
     "process_image_pre_creation": EventType.IMAGE_PRE_CREATE,
-    "process_thumbnail_pre_creation": EventType.THUMBNAIL_PRE_CREATE,
     "process_image_post_create": EventType.IMAGE_POST_CREATE,
+    "process_image_pre_delete": EventType.IMAGE_PRE_DELETE,
+    "process_image_post_delete": EventType.IMAGE_POST_DELETE,
+    "process_thumbnail_pre_creation": EventType.THUMBNAIL_PRE_CREATE,
     "process_thumbnail_post_create": EventType.THUMBNAIL_POST_CREATE,
     "process_pin_pre_create": EventType.PIN_PRE_CREATE,
     "process_pin_post_create": EventType.PIN_POST_CREATE,
