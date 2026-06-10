@@ -9,7 +9,6 @@ from pinry_plugins.events import (
     get_event_bus,
 )
 
-_plugins = getattr(settings, "ENABLED_PLUGINS", [])
 _plugin_instances = []
 
 LEGACY_METHOD_MAP = {
@@ -89,7 +88,8 @@ def _register_plugin_events(plugin) -> None:
 
 
 def _load_plugins():
-    for plugin_path in _plugins:
+    plugins = getattr(settings, "ENABLED_PLUGINS", [])
+    for plugin_path in plugins:
         plugin_cls = import_string(plugin_path)
         try:
             plugin_instance = plugin_cls()

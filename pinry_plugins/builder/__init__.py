@@ -1,5 +1,3 @@
-from . import _loader
-
-
 def init():
+    from . import _loader
     _loader.init()
