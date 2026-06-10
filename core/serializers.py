@@ -1,30 +1,14 @@
 from django.conf import settings
-from django.db.models import Q
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from taggit.models import Tag
 
 from core.models import Image, Board
 from core.models import Pin
+from core.visibility import VisibilityPolicy
 from django_images.models import Thumbnail
 from users.serializers import UserSerializer
 from users.models import User
-
-
-def filter_private_pin(request, query):
-    if request.user.is_authenticated:
-        query = query.exclude(~Q(submitter=request.user), private=True)
-    else:
-        query = query.exclude(private=True)
-    return query.select_related('image', 'submitter')
-
-
-def filter_private_board(request, query):
-    if request.user.is_authenticated:
-        query = query.exclude(~Q(submitter=request.user), private=True)
-    else:
-        query = query.exclude(private=True)
-    return query
 
 
 class ThumbnailSerializer(serializers.HyperlinkedModelSerializer):
@@ -146,7 +130,6 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
             instance.tags.set(*tags)
         else:
             instance.tags.set()
-        # change for image-id or image is not allowed
         validated_data.pop('image_by_id', None)
         return super(PinSerializer, self).update(instance, validated_data)
 
@@ -212,7 +195,7 @@ class BoardSerializer(serializers.HyperlinkedModelSerializer):
     def get_total_pins(self, instance):
         query = instance.pins.all()
         request = self.context['request']
-        query = filter_private_pin(request, query)
+        query = VisibilityPolicy.filter_visible(query, request.user).select_related('image', 'submitter')
         return query.count()
 
     def get_cover(self, instance: Board) -> dict or None:
@@ -226,7 +209,7 @@ class BoardSerializer(serializers.HyperlinkedModelSerializer):
         pins = Pin.objects.filter(id__in=pins_id)
         valid_pins = []
         for pin in pins:
-            if pin.private and pin.submitter != submitter:
+            if not VisibilityPolicy.can_view(pin, submitter):
                 continue
             valid_pins.append(pin)
         return valid_pins

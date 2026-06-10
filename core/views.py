@@ -9,7 +9,7 @@ from taggit.models import Tag
 from core import serializers as api
 from core.models import Image, Pin, Board
 from core.permissions import IsOwnerOrReadOnly, OwnerOnlyIfPrivate
-from core.serializers import filter_private_pin, filter_private_board
+from core.visibility import VisibilityPolicy
 
 
 class ImageViewSet(mixins.CreateModelMixin, GenericViewSet):
@@ -29,9 +29,9 @@ class PinViewSet(viewsets.ModelViewSet):
     permission_classes = [IsOwnerOrReadOnly("submitter"), OwnerOnlyIfPrivate("submitter")]
 
     def get_queryset(self):
-        query = Pin.objects.all()
-        request = self.request
-        return filter_private_pin(request, query)
+        return VisibilityPolicy.filter_visible(
+            Pin.objects.all(), self.request.user
+        ).select_related('image', 'submitter')
 
 
 class BoardViewSet(viewsets.ModelViewSet):
@@ -44,7 +44,7 @@ class BoardViewSet(viewsets.ModelViewSet):
     permission_classes = [IsOwnerOrReadOnly("submitter"), OwnerOnlyIfPrivate("submitter")]
 
     def get_queryset(self):
-        return filter_private_board(self.request, Board.objects.all())
+        return VisibilityPolicy.filter_visible(Board.objects.all(), self.request.user)
 
 
 class BoardAutoCompleteViewSet(
@@ -60,7 +60,7 @@ class BoardAutoCompleteViewSet(
     permission_classes = [OwnerOnlyIfPrivate("submitter"), ]
 
     def get_queryset(self):
-        return filter_private_board(self.request, Board.objects.all())
+        return VisibilityPolicy.filter_visible(Board.objects.all(), self.request.user)
 
 
 class TagAutoCompleteViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
