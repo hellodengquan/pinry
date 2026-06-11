@@ -7,6 +7,7 @@ from taggit.models import Tag
 from core.models import Image, Board
 from core.models import Pin
 from core.models import normalize_url
+from core.models import ImageManager
 from django_images.models import Thumbnail
 from users.serializers import UserSerializer
 from users.models import User
@@ -166,12 +167,16 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
         if url_changed and validated_data['url']:
             referer = validated_data.get('referer', instance.referer) or validated_data['url']
             normalized_referer = normalize_url(referer)
-            image, success = Image.objects.refresh_for_url(
+            image, result = Image.objects.refresh_for_url(
                 instance.image,
                 validated_data['url'],
                 normalized_referer,
             )
-            if not success:
+            if result == ImageManager.REFRESH_LOCK_FAILURE:
+                raise ValidationError(
+                    {"url": "Concurrent refresh in progress, please retry later"}
+                )
+            if not result:
                 raise ValidationError({"url": "failed to fetch preview image, old preview retained"})
             validated_data['referer'] = normalized_referer
 

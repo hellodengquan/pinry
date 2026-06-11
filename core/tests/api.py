@@ -858,3 +858,299 @@ class ThumbnailRefreshFailureTests(APITestCase):
         self.assertTrue(pin.image.thumbnail.image.name in old_thumbnail_paths)
         self.assertTrue(pin.image.square.image.name in old_thumbnail_paths)
         self.assertTrue(pin.image.standard.image.name in old_thumbnail_paths)
+
+
+class ConcurrentRefreshTests(APITestCase):
+
+    def setUp(self):
+        super(ConcurrentRefreshTests, self).setUp()
+        self.user = create_user("default")
+        self.client.login(username=self.user.username, password='password')
+
+    def tearDown(self):
+        _teardown_models()
+
+    def _create_pin_with_mock(self, url, mock_func):
+        with mock.patch('requests.get', mock_func):
+            create_url = reverse("pin-list")
+            post_data = {
+                'url': url,
+                'private': False,
+            }
+            response = self.client.post(create_url, data=post_data, format="json")
+            self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+            return response.data
+
+    @mock.patch('requests.get', mock_requests_get)
+    def test_concurrent_refresh_second_request_rejected(self):
+        from django.core.cache import cache
+        from core.models import ImageManager
+
+        url1 = 'http://testserver.com/mocked/logo-01.png'
+        url2 = 'http://testserver.com/mocked/logo-02.png'
+
+        pin_data = self._create_pin_with_mock(url1, mock_requests_get)
+        pin_id = pin_data['id']
+        image_id = pin_data['image']['id']
+
+        pin = Pin.objects.get(id=pin_id)
+        old_url = pin.url
+        old_image_path = pin.image.image.name
+        old_thumbnail_path = pin.image.thumbnail.image.name
+        storage = pin.image.image.storage
+
+        lock_key = 'pinry:refresh_lock:image:{}'.format(image_id)
+        cache.add(lock_key, '1', 120)
+
+        def mock_requests_get_new_image(url, **kwargs):
+            if 'logo-02' in url:
+                response = mock.Mock()
+                response.content = open('docs/src/imgs/logo-light.png', 'rb').read()
+                return response
+            return mock_requests_get(url, **kwargs)
+
+        try:
+            with mock.patch('requests.get', mock_requests_get_new_image):
+                pin_url = reverse("pin-detail", kwargs={"pk": pin_id})
+                patch_data = {'url': url2}
+                response = self.client.patch(pin_url, data=patch_data, format="json")
+
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+                self.assertIn('url', response.data)
+                self.assertIn('concurrent', str(response.data['url']).lower())
+        finally:
+            cache.delete(lock_key)
+
+        pin.refresh_from_db()
+        pin.image.refresh_from_db()
+        self.assertEqual(pin.url, old_url)
+        self.assertEqual(pin.image.image.name, old_image_path)
+        self.assertEqual(pin.image.thumbnail.image.name, old_thumbnail_path)
+
+        self.assertTrue(storage.exists(old_image_path))
+        self.assertTrue(storage.exists(old_thumbnail_path))
+
+    @mock.patch('requests.get', mock_requests_get)
+    def test_concurrent_refresh_preserves_file_record_consistency(self):
+        from django.core.cache import cache
+        from django_images.models import Thumbnail as ThumbnailModel
+
+        url1 = 'http://testserver.com/mocked/logo-01.png'
+        url2 = 'http://testserver.com/mocked/logo-02.png'
+
+        pin_data = self._create_pin_with_mock(url1, mock_requests_get)
+        pin_id = pin_data['id']
+        image_id = pin_data['image']['id']
+
+        pin = Pin.objects.get(id=pin_id)
+        old_thumbnail_ids = sorted(
+            pin.image.thumbnail_set.values_list('id', flat=True)
+        )
+        old_thumbnail_paths = sorted(
+            pin.image.thumbnail_set.values_list('image', flat=True)
+        )
+        storage = pin.image.image.storage
+
+        for p in old_thumbnail_paths:
+            self.assertTrue(storage.exists(p))
+
+        lock_key = 'pinry:refresh_lock:image:{}'.format(image_id)
+        cache.add(lock_key, '1', 120)
+
+        def mock_requests_get_new_image(url, **kwargs):
+            if 'logo-02' in url:
+                response = mock.Mock()
+                response.content = open('docs/src/imgs/logo-light.png', 'rb').read()
+                return response
+            return mock_requests_get(url, **kwargs)
+
+        try:
+            with mock.patch('requests.get', mock_requests_get_new_image):
+                pin_url = reverse("pin-detail", kwargs={"pk": pin_id})
+                patch_data = {'url': url2}
+                response = self.client.patch(pin_url, data=patch_data, format="json")
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        finally:
+            cache.delete(lock_key)
+
+        pin.refresh_from_db()
+        current_thumbnail_ids = sorted(
+            pin.image.thumbnail_set.values_list('id', flat=True)
+        )
+        current_thumbnail_paths = sorted(
+            pin.image.thumbnail_set.values_list('image', flat=True)
+        )
+        self.assertEqual(current_thumbnail_ids, old_thumbnail_ids)
+        self.assertEqual(current_thumbnail_paths, old_thumbnail_paths)
+
+        for p in current_thumbnail_paths:
+            self.assertTrue(
+                storage.exists(p),
+                f"Thumbnail file {p} should still exist after rejected concurrent refresh"
+            )
+
+        all_db_paths = set(
+            ThumbnailModel.objects.filter(original=pin.image).values_list('image', flat=True)
+        )
+        for p in all_db_paths:
+            self.assertTrue(
+                storage.exists(p),
+                f"File-record mismatch: DB has {p} but file missing on disk"
+            )
+
+    @mock.patch('requests.get', mock_requests_get)
+    def test_refresh_succeeds_after_lock_released(self):
+        from django.core.cache import cache
+
+        url1 = 'http://testserver.com/mocked/logo-01.png'
+        url2 = 'http://testserver.com/mocked/logo-02.png'
+
+        pin_data = self._create_pin_with_mock(url1, mock_requests_get)
+        pin_id = pin_data['id']
+        image_id = pin_data['image']['id']
+        old_image_path = pin_data['image']['image']
+
+        lock_key = 'pinry:refresh_lock:image:{}'.format(image_id)
+        cache.add(lock_key, '1', 120)
+
+        def mock_requests_get_new_image(url, **kwargs):
+            if 'logo-02' in url:
+                response = mock.Mock()
+                response.content = open('docs/src/imgs/logo-light.png', 'rb').read()
+                return response
+            return mock_requests_get(url, **kwargs)
+
+        try:
+            with mock.patch('requests.get', mock_requests_get_new_image):
+                pin_url = reverse("pin-detail", kwargs={"pk": pin_id})
+                patch_data = {'url': url2}
+                resp_blocked = self.client.patch(pin_url, data=patch_data, format="json")
+                self.assertEqual(resp_blocked.status_code, status.HTTP_400_BAD_REQUEST)
+        finally:
+            cache.delete(lock_key)
+
+        with mock.patch('requests.get', mock_requests_get_new_image):
+            pin_url = reverse("pin-detail", kwargs={"pk": pin_id})
+            patch_data = {'url': url2}
+            response = self.client.patch(pin_url, data=patch_data, format="json")
+            self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+
+        pin = Pin.objects.get(id=pin_id)
+        self.assertEqual(pin.url, url2)
+        self.assertNotEqual(pin.image.image.name, old_image_path)
+
+        from django_images.models import Thumbnail as ThumbnailModel
+        for thumb in pin.image.thumbnail_set.all():
+            self.assertTrue(
+                pin.image.image.storage.exists(thumb.image.name),
+                f"Thumbnail {thumb.image.name} should exist on disk"
+            )
+
+        all_db_paths = set(
+            ThumbnailModel.objects.filter(original=pin.image).values_list('image', flat=True)
+        )
+        all_db_paths.add(pin.image.image.name)
+        for p in all_db_paths:
+            self.assertTrue(
+                pin.image.image.storage.exists(p),
+                f"File-record mismatch after successful refresh: DB has {p} but file missing"
+            )
+
+    @mock.patch('requests.get', mock_requests_get)
+    def test_image_level_lock_rejects_concurrent_refresh(self):
+        from django.core.cache import cache
+        from core.models import Image as CoreImage, ImageManager
+
+        url1 = 'http://testserver.com/mocked/logo-01.png'
+        url2 = 'http://testserver.com/mocked/logo-02.png'
+
+        pin_data = self._create_pin_with_mock(url1, mock_requests_get)
+        pin_id = pin_data['id']
+        image_id = pin_data['image']['id']
+
+        pin = Pin.objects.get(id=pin_id)
+        old_thumbnail_path = pin.image.thumbnail.image.name
+        storage = pin.image.image.storage
+
+        lock_key = 'pinry:refresh_lock:image:{}'.format(image_id)
+        cache.add(lock_key, '1', 120)
+
+        try:
+            image, result = CoreImage.objects.refresh_for_url(
+                pin.image, url2, url2
+            )
+            self.assertEqual(result, ImageManager.REFRESH_LOCK_FAILURE)
+            self.assertIsNone(image)
+        finally:
+            cache.delete(lock_key)
+
+        self.assertTrue(
+            storage.exists(old_thumbnail_path),
+            "Old thumbnail should still exist after lock rejection"
+        )
+
+        pin.refresh_from_db()
+        pin.image.refresh_from_db()
+        self.assertEqual(pin.image.thumbnail.image.name, old_thumbnail_path)
+
+    @mock.patch('requests.get', mock_requests_get)
+    def test_concurrent_refresh_no_orphan_files(self):
+        from django.core.cache import cache
+        from django_images.models import Thumbnail as ThumbnailModel
+        import os
+
+        url1 = 'http://testserver.com/mocked/logo-01.png'
+        url2 = 'http://testserver.com/mocked/logo-02.png'
+
+        pin_data = self._create_pin_with_mock(url1, mock_requests_get)
+        pin_id = pin_data['id']
+        image_id = pin_data['image']['id']
+
+        pin = Pin.objects.get(id=pin_id)
+        storage = pin.image.image.storage
+        media_root = storage.location
+
+        def list_media_files():
+            result = set()
+            for root, dirs, files in os.walk(media_root):
+                for f in files:
+                    result.add(os.path.join(root, f))
+            return result
+
+        files_before = list_media_files()
+
+        lock_key = 'pinry:refresh_lock:image:{}'.format(image_id)
+        cache.add(lock_key, '1', 120)
+
+        def mock_requests_get_new_image(url, **kwargs):
+            if 'logo-02' in url:
+                response = mock.Mock()
+                response.content = open('docs/src/imgs/logo-light.png', 'rb').read()
+                return response
+            return mock_requests_get(url, **kwargs)
+
+        try:
+            with mock.patch('requests.get', mock_requests_get_new_image):
+                pin_url = reverse("pin-detail", kwargs={"pk": pin_id})
+                patch_data = {'url': url2}
+                response = self.client.patch(pin_url, data=patch_data, format="json")
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        finally:
+            cache.delete(lock_key)
+
+        files_after_rejected = list_media_files()
+        orphan_files = files_after_rejected - files_before
+        self.assertEqual(
+            len(orphan_files), 0,
+            f"No orphan files should remain after rejected refresh, found: {orphan_files}"
+        )
+
+        all_db_paths = set()
+        all_db_paths.add(pin.image.image.name)
+        for thumb in pin.image.thumbnail_set.all():
+            all_db_paths.add(thumb.image.name)
+        for p in all_db_paths:
+            self.assertTrue(
+                storage.exists(p),
+                f"File-record mismatch: DB has {p} but file missing"
+            )

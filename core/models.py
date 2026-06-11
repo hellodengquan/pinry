@@ -87,11 +87,26 @@ class ImageManager(models.Manager):
         Thumbnail.objects.get_or_create_at_sizes(image, settings.IMAGE_SIZES.keys())
         return image
 
+    REFRESH_LOCK_FAILURE = 'LOCK_FAILURE'
+    _REFRESH_LOCK_TIMEOUT = 120
+
+    @staticmethod
+    def _acquire_refresh_lock(image_pk):
+        from django.core.cache import cache
+        lock_key = 'pinry:refresh_lock:image:{}'.format(image_pk)
+        return cache.add(lock_key, '1', ImageManager._REFRESH_LOCK_TIMEOUT)
+
+    @staticmethod
+    def _release_refresh_lock(image_pk):
+        from django.core.cache import cache
+        lock_key = 'pinry:refresh_lock:image:{}'.format(image_pk)
+        cache.delete(lock_key)
+
     def refresh_for_url(self, image_instance, url, referer=None):
         from django.db import transaction
-        from django.db.models.signals import post_delete
+        from django.db.models.signals import post_delete, post_save
         from django_images.models import Image as DjangoImage
-        from django_images.models import delete_image_files
+        from django_images.models import delete_image_files, original_changed
 
         normalized_url = normalize_url(url)
         normalized_referer = normalize_url(referer) if referer else normalized_url
@@ -102,6 +117,20 @@ class ImageManager(models.Manager):
             return None, False
         if not obj:
             return None, False
+
+        if not self._acquire_refresh_lock(image_instance.pk):
+            return None, self.REFRESH_LOCK_FAILURE
+
+        try:
+            return self._do_refresh(image_instance, obj, normalized_url, normalized_referer)
+        finally:
+            self._release_refresh_lock(image_instance.pk)
+
+    def _do_refresh(self, image_instance, obj, normalized_url, normalized_referer):
+        from django.db import transaction
+        from django.db.models.signals import post_delete, post_save
+        from django_images.models import Image as DjangoImage
+        from django_images.models import delete_image_files, original_changed
 
         old_image_path = image_instance.image.name
         storage = image_instance.image.storage
@@ -149,9 +178,6 @@ class ImageManager(models.Manager):
         try:
             sid = transaction.savepoint()
             from io import BytesIO
-            from django.core.files.uploadedfile import InMemoryUploadedFile
-            from django.db.models.signals import post_save
-            from django_images.models import original_changed
 
             post_delete.disconnect(delete_image_files)
             post_save.disconnect(original_changed)
@@ -303,10 +329,12 @@ class Pin(models.Model):
             return False, "URL is required"
         normalized_url = normalize_url(self.url)
         normalized_referer = normalize_url(self.referer) if self.referer else normalized_url
-        image, success = Image.objects.refresh_for_url(
+        image, result = Image.objects.refresh_for_url(
             self.image, normalized_url, normalized_referer
         )
-        if success:
+        if result == ImageManager.REFRESH_LOCK_FAILURE:
+            return False, "Concurrent refresh in progress, please retry later"
+        if result:
             self.url = normalized_url
             self.referer = normalized_referer if normalized_referer else normalized_url
             self.save(update_fields=['url', 'referer'])
