@@ -54,9 +54,11 @@ export default {
               this.$buefy.toast.open('Board deleted');
               this.$emit('board-delete-succeed', this.board.id);
             },
-            () => {
+            (error) => {
+              const apiError = error && (error.apiError || API.parseErrorData(error.response && error.response.data));
+              const msg = API.getErrorMessage(apiError) || 'Failed to delete Board';
               this.$buefy.toast.open(
-                { type: 'is-danger', message: 'Failed to delete Board' },
+                { type: 'is-danger', message: msg },
               );
             },
           );

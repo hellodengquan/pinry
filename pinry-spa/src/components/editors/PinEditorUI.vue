@@ -82,9 +82,11 @@ export default {
               this.$buefy.toast.open('Pin removed');
               this.$emit('pin-remove-from-board-succeed', this.pin.id);
             },
-            () => {
+            (error) => {
+              const apiError = error && (error.apiError || API.parseErrorData(error.response && error.response.data));
+              const msg = API.getErrorMessage(apiError) || 'Failed to Remove Pin';
               this.$buefy.toast.open(
-                { type: 'is-danger', message: 'Failed to Remove Pin' },
+                { type: 'is-danger', message: msg },
               );
             },
           );
@@ -111,9 +113,11 @@ export default {
               this.$buefy.toast.open('Pin deleted');
               this.$emit('pin-delete-succeed', this.pin.id);
             },
-            () => {
+            (error) => {
+              const apiError = error && (error.apiError || API.parseErrorData(error.response && error.response.data));
+              const msg = API.getErrorMessage(apiError) || 'Failed to delete Pin';
               this.$buefy.toast.open(
-                { type: 'is-danger', message: 'Failed to delete Pin' },
+                { type: 'is-danger', message: msg },
               );
             },
           );

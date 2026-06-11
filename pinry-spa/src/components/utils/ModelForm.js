@@ -1,4 +1,6 @@
 
+import api from '../api';
+
 function createFormModel(fields) {
   const form = {};
   fields.forEach(
@@ -25,16 +27,13 @@ function FormHelper(form, fields = []) {
     self[fieldName].type = 'is-danger';
   }
   function markFieldsAsDanger(errorRespObject) {
-    Object.entries(errorRespObject).forEach(
+    const fieldErrors = api.getFieldErrors(errorRespObject);
+    Object.entries(fieldErrors).forEach(
       (errorTuple) => {
-        const [key, error] = errorTuple;
-        let msg;
-        if (Array.isArray(error)) {
-          [msg] = error;
-        } else {
-          msg = error;
+        const [key, msg] = errorTuple;
+        if (key in self) {
+          markFieldAsDanger(key, msg);
         }
-        markFieldAsDanger(key, msg);
       },
     );
   }

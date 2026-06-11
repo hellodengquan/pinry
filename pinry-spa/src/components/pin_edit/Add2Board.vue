@@ -70,10 +70,12 @@ export default {
             this.$buefy.toast.open('Succeed to add pin to boards');
             this.$parent.close();
           },
-          () => {
+          (error) => {
+            const apiError = error && (error.apiError || API.parseErrorData(error.response && error.response.data));
+            const msg = API.getErrorMessage(apiError) || 'Failed to add pin to boards';
             this.$buefy.toast.open(
               {
-                message: 'Failed to add pin to boards',
+                message: msg,
                 type: 'is-danger',
               },
             );

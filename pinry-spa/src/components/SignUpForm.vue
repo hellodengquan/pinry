@@ -98,13 +98,19 @@ export default {
           self.$emit('signup.succeed', user);
           self.$parent.close();
         },
-        (resp) => {
-          if (resp.status === 401) {
+        (apiError) => {
+          if (apiError && apiError.status === 401) {
             this.$buefy.toast.open(
-              { type: 'is-danger', message: 'sign up of this site closed by owner' },
+              { type: 'is-danger', message: apiError.message || 'sign up of this site closed by owner' },
             );
           } else {
-            self.helper.markFieldsAsDanger(resp.data);
+            self.helper.markFieldsAsDanger(apiError);
+            const msg = api.getErrorMessage(apiError);
+            if (msg && Object.keys(api.getFieldErrors(apiError)).length === 0) {
+              this.$buefy.toast.open(
+                { type: 'is-danger', message: msg },
+              );
+            }
           }
         },
       );

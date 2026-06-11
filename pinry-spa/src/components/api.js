@@ -3,24 +3,110 @@ import storage from './utils/storage';
 
 const API_PREFIX = '/api/v2/';
 
-function getFieldErrors(errorData) {
-  if (!errorData) return {};
+class ApiError {
+  constructor(code, message, detail, fieldErrors, rawData, status) {
+    this.code = code;
+    this.message = message;
+    this.detail = detail;
+    this.fieldErrors = fieldErrors;
+    this.data = rawData;
+    this.status = status;
+  }
+}
+
+function extractFieldErrors(data) {
   const fieldErrors = {};
   const skipKeys = ['code', 'message', 'detail'];
-  Object.entries(errorData).forEach(([key, value]) => {
+  Object.entries(data).forEach(([key, value]) => {
     if (!skipKeys.includes(key)) {
       if (Array.isArray(value)) {
         fieldErrors[key] = value[0] || '';
-      } else {
+      } else if (typeof value === 'string') {
         fieldErrors[key] = value;
       }
+    }
+  });
+
+  if (Object.keys(fieldErrors).length === 0 && data.detail && typeof data.detail === 'object') {
+    Object.entries(data.detail).forEach(([key, value]) => {
+      if (Array.isArray(value)) {
+        fieldErrors[key] = value[0] || '';
+      } else if (typeof value === 'string') {
+        fieldErrors[key] = value;
+      }
+    });
+  }
+
+  return fieldErrors;
+}
+
+function extractFieldErrorsFromLegacy(data) {
+  const fieldErrors = {};
+  Object.entries(data).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      fieldErrors[key] = value[0] || '';
+    } else if (typeof value === 'string') {
+      fieldErrors[key] = value;
     }
   });
   return fieldErrors;
 }
 
+function parseErrorData(data) {
+  if (!data || typeof data !== 'object') {
+    return new ApiError(
+      null,
+      typeof data === 'string' ? data : '',
+      null,
+      {},
+      data,
+      null,
+    );
+  }
+
+  const hasNewFormat = 'code' in data && 'message' in data && 'detail' in data;
+
+  if (hasNewFormat) {
+    const { code, message, detail } = data;
+    return new ApiError(code, message || '', detail, extractFieldErrors(data), data, null);
+  }
+
+  return new ApiError(null, '', data, extractFieldErrorsFromLegacy(data), data, null);
+}
+
+axios.interceptors.response.use(
+  response => response,
+  (err) => {
+    const enriched = Object.assign({}, err);
+    if (err.response) {
+      const apiError = parseErrorData(err.response.data);
+      apiError.status = err.response.status;
+      enriched.apiError = apiError;
+    } else {
+      enriched.apiError = new ApiError(null, err.message || 'Network error', null, {}, null, 0);
+    }
+    return Promise.reject(enriched);
+  },
+);
+
+function getFieldErrors(errorData) {
+  if (!errorData) return {};
+  if (errorData instanceof ApiError) {
+    return errorData.fieldErrors;
+  }
+  if (errorData && typeof errorData === 'object' && ('code' in errorData || 'message' in errorData)) {
+    return extractFieldErrors(errorData);
+  }
+  return extractFieldErrorsFromLegacy(errorData);
+}
+
 function getErrorMessage(errorData) {
   if (!errorData) return '';
+  if (errorData instanceof ApiError) {
+    return errorData.message;
+  }
+  if (typeof errorData === 'string') return errorData;
+  if (typeof errorData !== 'object') return '';
   if (errorData.message) return errorData.message;
   if (errorData.detail && typeof errorData.detail === 'string') return errorData.detail;
   return '';
@@ -28,11 +114,17 @@ function getErrorMessage(errorData) {
 
 function getErrorCode(errorData) {
   if (!errorData) return null;
+  if (errorData instanceof ApiError) {
+    return errorData.code;
+  }
   return errorData.code || null;
 }
 
 function getErrorDetail(errorData) {
   if (!errorData) return null;
+  if (errorData instanceof ApiError) {
+    return errorData.detail;
+  }
   return errorData.detail || null;
 }
 
@@ -50,7 +142,7 @@ const Board = {
             resolve(resp.data);
           },
           (error) => {
-            reject(error.response);
+            reject(error.apiError || error.response);
           },
         );
       },
@@ -213,7 +305,7 @@ const User = {
           },
           (error) => {
             console.log('Failed to sign up due to unexpected error:', error);
-            reject(error.response);
+            reject(error.apiError || error.response);
           },
         );
       },
@@ -239,7 +331,7 @@ const User = {
           },
           (error) => {
             console.log('Failed to log in due to unexpected error:', error);
-            reject(error.response);
+            reject(error.apiError || error.response);
           },
         );
       },
@@ -259,7 +351,6 @@ const User = {
     );
   },
   fetchUserInfoByName(username) {
-    /* returns null if user not logged in */
     const url = `${API_PREFIX}profile/public-users/?username=${username}`;
     return new Promise(
       (resolve) => {
@@ -276,7 +367,6 @@ const User = {
     );
   },
   fetchUserInfo(force = false) {
-    /* returns null if user not logged in */
     const self = this;
     if (!force) {
       const userInfo = storage.get(self.storageKey);
@@ -320,8 +410,10 @@ export default {
   fetchPins,
   fetchBoardForUser,
   User,
+  ApiError,
   getFieldErrors,
   getErrorMessage,
   getErrorCode,
   getErrorDetail,
+  parseErrorData,
 };

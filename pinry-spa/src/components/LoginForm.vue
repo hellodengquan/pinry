@@ -78,8 +78,8 @@ export default {
           self.$parent.close();
           window.location.reload();
         },
-        (resp) => {
-          self.helper.markFieldsAsDanger(resp.data);
+        (apiError) => {
+          self.helper.markFieldsAsDanger(apiError);
         },
       );
     },

@@ -57,8 +57,13 @@ export default {
           this.loading = false;
           this.$emit('imageUploadSucceed', this.uploadedImage.id);
         },
-        () => {
+        (error) => {
           this.loading = false;
+          const apiError = error.apiError || API.parseErrorData(error.response && error.response.data);
+          const msg = API.getErrorMessage(apiError);
+          if (msg) {
+            this.$buefy.toast.open({ type: 'is-danger', message: msg });
+          }
           this.$emit('imageUploadFailed');
         },
       );

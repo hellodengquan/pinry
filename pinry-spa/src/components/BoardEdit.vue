@@ -118,7 +118,12 @@ export default {
           self.$parent.close();
         },
         (error) => {
-          self.editModel.markFieldsAsDanger(error.response.data);
+          const apiError = error.apiError || API.parseErrorData(error.response && error.response.data);
+          self.editModel.markFieldsAsDanger(apiError);
+          const msg = API.getErrorMessage(apiError);
+          if (msg && Object.keys(API.getFieldErrors(apiError)).length === 0) {
+            self.$buefy.toast.open({ type: 'is-danger', message: msg });
+          }
         },
       );
     },
@@ -134,8 +139,12 @@ export default {
           self.$emit('boardCreated', resp);
           self.$parent.close();
         },
-        (resp) => {
-          self.createModel.markFieldsAsDanger(resp.data);
+        (apiError) => {
+          self.createModel.markFieldsAsDanger(apiError);
+          const msg = API.getErrorMessage(apiError);
+          if (msg && Object.keys(API.getFieldErrors(apiError)).length === 0) {
+            self.$buefy.toast.open({ type: 'is-danger', message: msg });
+          }
         },
       );
     },
