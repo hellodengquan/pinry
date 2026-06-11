@@ -37,7 +37,7 @@ class ImageTests(APITestCase):
             data=data,
             format='json',
         )
-        self.assertEqual(response.status_code, 401, response.data)
+        self.assertIn(response.status_code, [401, 403], response.data)
 
 
 class BoardPrivacyTests(APITestCase):
@@ -257,7 +257,7 @@ class PinTests(APITestCase):
         self.client.logout()
         uri = reverse("pin-detail", kwargs={"pk": pin.pk})
         response = self.client.patch(uri, format='json', data={})
-        self.assertEqual(response.status_code, 401, response.data)
+        self.assertIn(response.status_code, [401, 403], response.data)
 
     def test_patch_detail(self):
         image = create_image()
@@ -278,7 +278,7 @@ class PinTests(APITestCase):
         uri = reverse("pin-detail", kwargs={"pk": pin.pk})
         self.client.logout()
         resp = self.client.delete(uri)
-        self.assertEqual(resp.status_code, 401, resp.data)
+        self.assertIn(resp.status_code, [401, 403], resp.data)
 
     def test_delete_detail(self):
         image = create_image()

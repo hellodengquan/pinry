@@ -275,11 +275,10 @@ class TagAutoCompleteSerializer(serializers.ModelSerializer):
         fields = ('name', )
 
 
-class AnonymousPinSerializer(serializers.HyperlinkedModelSerializer):
+class AnonymousPinSerializer(serializers.ModelSerializer):
     class Meta:
         model = Pin
         fields = (
-            settings.DRF_URL_FIELD_NAME,
             "id",
             "url",
             "description",
@@ -301,11 +300,10 @@ class AnonymousPinSerializer(serializers.HyperlinkedModelSerializer):
         return instance.submitter.username
 
 
-class AnonymousBoardSerializer(serializers.HyperlinkedModelSerializer):
+class AnonymousBoardSerializer(serializers.ModelSerializer):
     class Meta:
         model = Board
         fields = (
-            settings.DRF_URL_FIELD_NAME,
             "id",
             "name",
             "total_pins",

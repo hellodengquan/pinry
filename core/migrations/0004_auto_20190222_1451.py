@@ -28,8 +28,8 @@ class Migration(migrations.Migration):
             name='board',
             unique_together=set([('submitter', 'name')]),
         ),
-        migrations.AlterIndexTogether(
-            name='board',
-            index_together=set([('submitter', 'name')]),
+        migrations.AddIndex(
+            model_name='board',
+            index=models.Index(fields=['submitter', 'name'], name='core_board_submitter_name_idx'),
         ),
     ]
