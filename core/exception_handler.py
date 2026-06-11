@@ -119,22 +119,24 @@ def _extract_field_errors(detail):
 
 
 def custom_exception_handler(exc, context):
-    response = drf_exception_handler(exc, context)
-
-    if response is None:
-        return None
-
-    status_code = response.status_code
-
-    error_code = _get_error_code_from_exception(exc, status_code)
-    message = _get_message_from_exception(exc, error_code)
-
     if isinstance(exc, APIException):
+        status_code = exc.status_code
+        error_code = exc.code
+        message = exc.message if exc.message else get_error_message(error_code)
         detail = exc.detail
-    elif hasattr(exc, 'detail'):
-        detail = _normalize_detail(exc.detail)
     else:
-        detail = str(exc)
+        response = drf_exception_handler(exc, context)
+        if response is None:
+            return None
+
+        status_code = response.status_code
+        error_code = _get_error_code_from_exception(exc, status_code)
+        message = _get_message_from_exception(exc, error_code)
+
+        if hasattr(exc, 'detail'):
+            detail = _normalize_detail(exc.detail)
+        else:
+            detail = str(exc)
 
     detail = truncate_detail(detail)
 
@@ -147,8 +149,10 @@ def custom_exception_handler(exc, context):
     field_errors = _extract_field_errors(detail)
     error_response.update(field_errors)
 
-    response.data = error_response
+    if isinstance(exc, APIException):
+        return Response(error_response, status=status_code)
 
+    response.data = error_response
     return response
 
 

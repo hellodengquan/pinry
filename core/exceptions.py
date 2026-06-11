@@ -106,22 +106,27 @@ def get_error_message(code):
 
 
 def format_error_response(code, message=None, detail=None, extra_fields=None):
-    response_data = {
-        "code": code,
-        "message": message if message is not None else get_error_message(code),
-        "detail": detail if detail is not None else {},
-    }
+    response_data = {}
 
     if extra_fields and isinstance(extra_fields, dict):
         response_data.update(extra_fields)
 
-    response_data["detail"] = truncate_detail(response_data["detail"])
+    response_data.update({
+        "code": code,
+        "message": message if message is not None else get_error_message(code),
+        "detail": truncate_detail(detail if detail is not None else {}),
+    })
 
     return response_data
 
 
 def get_http_status_from_error_code(code):
-    for http_status, error_code in HTTP_STATUS_TO_ERROR_CODE.items():
+    sorted_mappings = sorted(
+        HTTP_STATUS_TO_ERROR_CODE.items(),
+        key=lambda x: x[1],
+        reverse=True,
+    )
+    for http_status, error_code in sorted_mappings:
         if code >= error_code and code < error_code + 100:
             return http_status
     return status.HTTP_500_INTERNAL_SERVER_ERROR
