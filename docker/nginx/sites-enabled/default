@@ -16,16 +16,23 @@ server {
         expires max;
         access_log off;
     }
+
     location /media {
-        alias /data/static/media;
-        expires max;
-        access_log off;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_pass http://localhost:8000;
+    }
+
+    location /internal-media/ {
+        internal;
+        alias /data/static/media/;
     }
 
     location /api {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_pass http://localhost:8000;
         break;
     }
@@ -33,7 +40,7 @@ server {
     location /admin {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_pass http://localhost:8000;
         break;
     }

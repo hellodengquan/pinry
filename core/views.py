@@ -6,8 +6,7 @@ from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.viewsets import GenericViewSet
 from taggit.models import Tag
 from django.conf import settings
-from django.contrib.auth.decorators import login_required
-from django.http import Http404, HttpResponseForbidden
+from django.http import Http404, HttpResponse, HttpResponseForbidden
 from django.views.static import serve
 
 from core import serializers as api
@@ -91,7 +90,6 @@ drf_router.register(r'boards-auto-complete', BoardAutoCompleteViewSet, basename=
 
 def find_image_for_path(path):
     from django_images.models import Thumbnail
-    import os
 
     path_normalized = path.lstrip('/')
 
@@ -111,29 +109,39 @@ def find_image_for_path(path):
     return image
 
 
-def protected_media(request, path, document_root=None, show_indexes=False):
-    if not settings.DEBUG and not settings.IS_TEST:
-        return serve(request, path, document_root, show_indexes)
+def _can_access_image(user, image):
+    pins = Pin.objects.filter(image=image)
+    if not pins.exists():
+        return False
 
+    if pins.filter(private=False).exists():
+        return True
+
+    if not user.is_authenticated:
+        return False
+
+    return pins.filter(private=True, submitter=user).exists()
+
+
+def protected_media(request, path, document_root=None, show_indexes=False):
     image = find_image_for_path(path)
 
     if image is None:
         raise Http404('Image not found')
 
-    pins = Pin.objects.filter(image=image)
-    if not pins.exists():
-        raise Http404('No pins reference this image')
+    if not _can_access_image(request.user, image):
+        if request.user.is_authenticated:
+            return HttpResponseForbidden(
+                'You do not have permission to access this content'
+            )
+        return HttpResponseForbidden(
+            'Authentication required for private content'
+        )
 
-    has_public = pins.filter(private=False).exists()
-    if has_public:
+    if settings.DEBUG or settings.IS_TEST:
         return serve(request, path, document_root, show_indexes)
 
-    all_private = pins.filter(private=True)
-    if not request.user.is_authenticated:
-        return HttpResponseForbidden('Authentication required for private content')
-
-    is_owner = all_private.filter(submitter=request.user).exists()
-    if not is_owner:
-        return HttpResponseForbidden('You do not have permission to access this content')
-
-    return serve(request, path, document_root, show_indexes)
+    response = HttpResponse()
+    response['X-Accel-Redirect'] = '/internal-media/{}'.format(path.lstrip('/'))
+    response['Content-Type'] = ''
+    return response

@@ -20,13 +20,15 @@ urlpatterns = [
     # old api and views
     path('admin/', admin.site.urls),
     path('api/v2/profile/', include('users.urls')),
+
+    # protected media - all environments go through permission check
+    # production uses X-Accel-Redirect to delegate file serving to nginx
+    # debug/test uses Django's serve() directly
+    re_path(r'^media/(?P<path>.*)$', protected_media, {
+        'document_root': settings.MEDIA_ROOT,
+    }),
 ]
 
 
 if settings.DEBUG or settings.IS_TEST:
     urlpatterns += staticfiles_urlpatterns()
-    urlpatterns += [
-        re_path(r'^media/(?P<path>.*)$', protected_media, {
-            'document_root': settings.MEDIA_ROOT,
-        }),
-    ]

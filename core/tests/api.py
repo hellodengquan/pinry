@@ -1478,7 +1478,8 @@ class CrossUserPermissionMatrixTests(APITestCase):
 class MediaDirectLinkPermissionTests(APITestCase):
     """媒体文件直链访问权限测试
     验证匿名用户和第三方用户是否可以绕过 API 接口，
-    通过直接请求媒体文件地址来访问私有图钉的原图和缩略图
+    通过直接请求媒体文件地址来访问私有图钉的原图和缩略图。
+    同时验证生产模式下 X-Accel-Redirect 行为正确。
     """
 
     def setUp(self):
@@ -1540,36 +1541,32 @@ class MediaDirectLinkPermissionTests(APITestCase):
     def test_anonymous_cannot_access_private_pin_original_image(self):
         original_url, _ = self._get_image_urls(self.private_pin)
         resp = self.client.get(original_url)
-        self.assertNotEqual(resp.status_code, 200)
-        self.assertIn(resp.status_code, [401, 403, 404])
+        self.assertEqual(resp.status_code, 403)
 
     def test_anonymous_cannot_access_private_pin_thumbnail(self):
         _, thumbnail_urls = self._get_image_urls(self.private_pin)
         for size, url in thumbnail_urls.items():
             resp = self.client.get(url)
-            self.assertNotEqual(
-                resp.status_code, 200,
+            self.assertEqual(
+                resp.status_code, 403,
                 f"Anonymous could access {size} thumbnail of private pin via {url}"
             )
-            self.assertIn(resp.status_code, [401, 403, 404])
 
     def test_other_user_cannot_access_private_pin_original_image(self):
         self.client.login(username=self.other_user.username, password='password')
         original_url, _ = self._get_image_urls(self.private_pin)
         resp = self.client.get(original_url)
-        self.assertNotEqual(resp.status_code, 200)
-        self.assertIn(resp.status_code, [401, 403, 404])
+        self.assertEqual(resp.status_code, 403)
 
     def test_other_user_cannot_access_private_pin_thumbnail(self):
         self.client.login(username=self.other_user.username, password='password')
         _, thumbnail_urls = self._get_image_urls(self.private_pin)
         for size, url in thumbnail_urls.items():
             resp = self.client.get(url)
-            self.assertNotEqual(
-                resp.status_code, 200,
+            self.assertEqual(
+                resp.status_code, 403,
                 f"Other user could access {size} thumbnail of private pin via {url}"
             )
-            self.assertIn(resp.status_code, [401, 403, 404])
 
     def test_owner_can_access_own_private_pin_original_image(self):
         self.client.login(username=self.owner.username, password='password')
@@ -1620,15 +1617,13 @@ class MediaDirectLinkPermissionTests(APITestCase):
     def test_anonymous_cannot_access_other_private_pin_original_image(self):
         original_url, _ = self._get_image_urls(self.other_private_pin)
         resp = self.client.get(original_url)
-        self.assertNotEqual(resp.status_code, 200)
-        self.assertIn(resp.status_code, [401, 403, 404])
+        self.assertEqual(resp.status_code, 403)
 
     def test_owner_cannot_access_other_private_pin_original_image(self):
         self.client.login(username=self.owner.username, password='password')
         original_url, _ = self._get_image_urls(self.other_private_pin)
         resp = self.client.get(original_url)
-        self.assertNotEqual(resp.status_code, 200)
-        self.assertIn(resp.status_code, [401, 403, 404])
+        self.assertEqual(resp.status_code, 403)
 
     def test_logout_user_cannot_access_private_pin_image(self):
         self.client.login(username=self.owner.username, password='password')
@@ -1638,8 +1633,7 @@ class MediaDirectLinkPermissionTests(APITestCase):
 
         self.client.logout()
         resp_after = self.client.get(original_url)
-        self.assertNotEqual(resp_after.status_code, 200)
-        self.assertIn(resp_after.status_code, [401, 403, 404])
+        self.assertEqual(resp_after.status_code, 403)
 
     def test_pin_privacy_toggle_blocks_media_access(self):
         self.client.login(username=self.owner.username, password='password')
@@ -1659,15 +1653,31 @@ class MediaDirectLinkPermissionTests(APITestCase):
 
         self.client.logout()
         resp_original = self.client.get(original_url)
-        self.assertNotEqual(resp_original.status_code, 200)
-        self.assertIn(resp_original.status_code, [401, 403, 404])
+        self.assertEqual(resp_original.status_code, 403)
 
         for size, url in thumbnail_urls.items():
             resp = self.client.get(url)
-            self.assertNotEqual(
-                resp.status_code, 200,
+            self.assertEqual(
+                resp.status_code, 403,
                 f"Could still access {size} thumbnail after pin was made private"
             )
+
+    def test_pin_privacy_toggle_to_public_allows_media_access(self):
+        with mock.patch('requests.get', mock_requests_get):
+            image = create_image()
+        test_pin = create_pin(self.owner, image, [])
+        test_pin.private = True
+        test_pin.save()
+
+        original_url, _ = self._get_image_urls(test_pin)
+        resp = self.client.get(original_url)
+        self.assertEqual(resp.status_code, 403)
+
+        test_pin.private = False
+        test_pin.save()
+
+        resp = self.client.get(original_url)
+        self.assertEqual(resp.status_code, 200)
 
     def test_media_urls_return_consistent_with_api(self):
         pin_url = reverse("pin-detail", kwargs={"pk": self.private_pin.id})
@@ -1675,15 +1685,13 @@ class MediaDirectLinkPermissionTests(APITestCase):
         resp_api = self.client.get(pin_url)
         self.assertEqual(resp_api.status_code, 404)
 
-        original_url, thumbnail_urls = self._get_image_urls(self.private_pin)
+        original_url, _ = self._get_image_urls(self.private_pin)
         resp_media = self.client.get(original_url)
 
-        if resp_api.status_code in [401, 403, 404]:
-            self.assertNotEqual(
-                resp_media.status_code, 200,
-                "API blocks access but media direct link allows it - SECURITY VULNERABILITY"
-            )
-            self.assertIn(resp_media.status_code, [401, 403, 404])
+        self.assertNotEqual(
+            resp_media.status_code, 200,
+            "API blocks access but media direct link allows it - SECURITY VULNERABILITY"
+        )
 
     def test_nonexistent_media_path_returns_404(self):
         resp = self.client.get('/media/image/original/by-md5/nonexistent/path/image.jpg')
@@ -1714,8 +1722,71 @@ class MediaDirectLinkPermissionTests(APITestCase):
         _, thumbnail_urls = self._get_image_urls(self.private_pin)
         for size, url in thumbnail_urls.items():
             resp = self.client.get(url)
-            self.assertNotEqual(
-                resp.status_code, 200,
+            self.assertEqual(
+                resp.status_code, 403,
                 f"Third user could access {size} thumbnail of owner's private pin via {url}"
             )
-            self.assertIn(resp.status_code, [401, 403, 404])
+
+    def test_production_mode_uses_x_accel_redirect_for_public(self):
+        from django.test.utils import override_settings
+
+        with override_settings(DEBUG=False, IS_TEST=False):
+            original_url, _ = self._get_image_urls(self.public_pin)
+            resp = self.client.get(original_url)
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn('X-Accel-Redirect', resp)
+            self.assertTrue(
+                resp['X-Accel-Redirect'].startswith('/internal-media/')
+            )
+
+    def test_production_mode_uses_x_accel_redirect_for_owner_private(self):
+        from django.test.utils import override_settings
+
+        self.client.login(username=self.owner.username, password='password')
+        with override_settings(DEBUG=False, IS_TEST=False):
+            original_url, _ = self._get_image_urls(self.private_pin)
+            resp = self.client.get(original_url)
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn('X-Accel-Redirect', resp)
+            self.assertTrue(
+                resp['X-Accel-Redirect'].startswith('/internal-media/')
+            )
+
+    def test_production_mode_blocks_anonymous_private_access(self):
+        from django.test.utils import override_settings
+
+        with override_settings(DEBUG=False, IS_TEST=False):
+            original_url, _ = self._get_image_urls(self.private_pin)
+            resp = self.client.get(original_url)
+            self.assertEqual(resp.status_code, 403)
+            self.assertNotIn('X-Accel-Redirect', resp)
+
+    def test_production_mode_blocks_other_user_private_access(self):
+        from django.test.utils import override_settings
+
+        self.client.login(username=self.other_user.username, password='password')
+        with override_settings(DEBUG=False, IS_TEST=False):
+            original_url, _ = self._get_image_urls(self.private_pin)
+            resp = self.client.get(original_url)
+            self.assertEqual(resp.status_code, 403)
+            self.assertNotIn('X-Accel-Redirect', resp)
+
+    def test_production_mode_x_accel_redirect_path_format(self):
+        from django.test.utils import override_settings
+
+        with override_settings(DEBUG=False, IS_TEST=False):
+            original_url, _ = self._get_image_urls(self.public_pin)
+            resp = self.client.get(original_url)
+            redirect_path = resp['X-Accel-Redirect']
+            self.assertTrue(
+                redirect_path.startswith('/internal-media/'),
+                f"Expected redirect to start with /internal-media/ but got {redirect_path}"
+            )
+            self.assertNotEqual(redirect_path, '/internal-media/')
+
+    def test_production_mode_nonexistent_path_returns_404(self):
+        from django.test.utils import override_settings
+
+        with override_settings(DEBUG=False, IS_TEST=False):
+            resp = self.client.get('/media/image/original/by-md5/nonexistent/path/image.jpg')
+            self.assertEqual(resp.status_code, 404)
