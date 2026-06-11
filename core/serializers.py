@@ -146,14 +146,13 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
         return pin
 
     def update(self, instance, validated_data):
+        from django.db import transaction
+
         tags = validated_data.pop('tag_list', None)
-        if tags:
-            instance.tags.set(*tags)
-        else:
-            instance.tags.set()
         validated_data.pop('image_by_id', None)
 
         url_changed = False
+        new_url = None
         if 'url' in validated_data:
             new_url = normalize_url(validated_data['url'])
             old_url = normalize_url(instance.url) if instance.url else None
@@ -176,7 +175,17 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
                 raise ValidationError({"url": "failed to fetch preview image, old preview retained"})
             validated_data['referer'] = normalized_referer
 
-        return super(PinSerializer, self).update(instance, validated_data)
+        try:
+            with transaction.atomic():
+                if tags is not None:
+                    instance.tags.set(*tags)
+                return super(PinSerializer, self).update(instance, validated_data)
+        except Exception:
+            try:
+                transaction.rollback()
+            except Exception:
+                pass
+            raise
 
 
 class PinIdListField(serializers.ListField):

@@ -114,6 +114,44 @@ class ThumbnailManager(models.Manager):
 
         return [sized[size] for size in sizes]
 
+    def refresh_at_sizes(self, image, sizes):
+        from django.db import transaction
+
+        for size in sizes:
+            if size not in IMAGE_SIZES:
+                raise ValueError("Received unknown size: %s" % size)
+
+        bufs = [
+            utils.write_image_in_memory(img)
+            for img in utils.scale_and_crop_iter(
+                image.image,
+                [IMAGE_SIZES[size] for size in sizes])
+        ]
+
+        old_thumbnails = list(image.thumbnail_set.all())
+        old_thumbnail_info = [
+            {'id': t.id, 'path': t.image.name, 'size': t.size}
+            for t in old_thumbnails if t.image.name
+        ]
+
+        with transaction.atomic():
+            if old_thumbnail_info:
+                old_ids = [t['id'] for t in old_thumbnail_info]
+                deleted = Thumbnail.objects.filter(id__in=old_ids).delete()
+
+            sized = {}
+            for size, buf in zip(sizes, bufs):
+                original_dir, original_file = os.path.split(image.image.name)
+                thumb_file = InMemoryUploadedFile(buf, "image", original_file,
+                                                  None, buf.tell(), None)
+                sized[size] = image.thumbnail_set.create(
+                    size=size, image=thumb_file)
+
+        if hasattr(image, '_prefetched_objects_cache'):
+            image._prefetched_objects_cache.pop('thumbnail_set', None)
+
+        return [sized[size] for size in sizes], old_thumbnail_info
+
 
 class Thumbnail(models.Model):
     original = models.ForeignKey(Image, on_delete=models.CASCADE)
@@ -142,5 +180,5 @@ def original_changed(sender, instance, created, **kwargs):
 @receiver(models.signals.post_delete)
 def delete_image_files(sender, instance, **kwargs):
     if isinstance(instance, (Image, Thumbnail)) and IMAGE_AUTO_DELETE:
-        if instance.image.storage.exists(instance.image.name):
+        if instance.image.name and instance.image.storage.exists(instance.image.name):
             instance.image.delete(save=False)

@@ -12,10 +12,24 @@ from core.models import Pin, Image, Board
 
 
 def _teardown_models():
-    Pin.objects.all().delete()
-    Image.objects.all().delete()
-    Tag.objects.all().delete()
-    Board.objects.all().delete()
+    from django.db import transaction
+    try:
+        Pin.objects.all().delete()
+        Image.objects.all().delete()
+        Tag.objects.all().delete()
+        Board.objects.all().delete()
+    except Exception:
+        try:
+            transaction.rollback()
+        except Exception:
+            pass
+        try:
+            Pin.objects.all().delete()
+            Image.objects.all().delete()
+            Tag.objects.all().delete()
+            Board.objects.all().delete()
+        except Exception:
+            pass
 
 
 def mock_requests_get(url, **kwargs):
@@ -249,7 +263,7 @@ class PinTests(APITestCase):
             'That\'s something else (probably a CC logo)!',
             resp_data
         )
-        self.assertEquals(Pin.objects.count(), 2)
+        self.assertEqual(Pin.objects.count(), 2)
 
     def test_patch_detail_unauthenticated(self):
         image = create_image()
@@ -607,3 +621,240 @@ class ThumbnailRefreshTests(APITestCase):
         self.assertIsNotNone(pin_in_list)
         self.assertNotEqual(pin_in_list['image']['thumbnail']['image'], old_thumbnail_url)
         self.assertEqual(pin_in_list['image']['thumbnail']['image'], new_thumbnail_url)
+
+
+class ThumbnailRefreshFailureTests(APITestCase):
+
+    def setUp(self):
+        super(ThumbnailRefreshFailureTests, self).setUp()
+        self.user = create_user("default")
+        self.client.login(username=self.user.username, password='password')
+
+    def tearDown(self):
+        _teardown_models()
+
+    def _create_pin_with_mock(self, url, mock_func):
+        with mock.patch('requests.get', mock_func):
+            create_url = reverse("pin-list")
+            post_data = {
+                'url': url,
+                'private': False,
+            }
+            response = self.client.post(create_url, data=post_data, format="json")
+            self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+            return response.data
+
+    @mock.patch('requests.get', mock_requests_get)
+    def test_thumbnail_generation_failure_keeps_old_preview(self):
+        from django_images import utils as django_images_utils
+
+        url1 = 'http://testserver.com/mocked/logo-01.png'
+        url2 = 'http://testserver.com/mocked/logo-02.png'
+
+        pin_data = self._create_pin_with_mock(url1, mock_requests_get)
+        pin_id = pin_data['id']
+
+        pin = Pin.objects.get(id=pin_id)
+        old_image_path = pin.image.image.name
+        old_thumbnail_path = pin.image.thumbnail.image.name
+        old_thumbnail_id = pin.image.thumbnail.id
+        old_url = pin.url
+
+        storage = pin.image.image.storage
+        self.assertTrue(storage.exists(old_image_path))
+        self.assertTrue(storage.exists(old_thumbnail_path))
+
+        def mock_requests_get_new_image(url, **kwargs):
+            if 'logo-02' in url:
+                response = mock.Mock()
+                response.content = open('docs/src/imgs/logo-light.png', 'rb').read()
+                return response
+            return mock_requests_get(url, **kwargs)
+
+        original_scale_and_crop_single = django_images_utils.scale_and_crop_single
+
+        def failing_scale_and_crop_single(*args, **kwargs):
+            raise IOError("Simulated thumbnail generation failure")
+
+        try:
+            with mock.patch('requests.get', mock_requests_get_new_image), \
+                 mock.patch.object(django_images_utils, 'scale_and_crop_single', failing_scale_and_crop_single):
+                pin_url = reverse("pin-detail", kwargs={"pk": pin_id})
+                patch_data = {'url': url2}
+                response = self.client.patch(pin_url, data=patch_data, format="json")
+
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+                self.assertIn('url', response.data)
+                self.assertIn('old preview retained', str(response.data['url']).lower())
+        finally:
+            django_images_utils.scale_and_crop_single = original_scale_and_crop_single
+
+        pin.refresh_from_db()
+        pin.image.refresh_from_db()
+
+        self.assertEqual(pin.url, old_url)
+        self.assertEqual(pin.image.image.name, old_image_path)
+        self.assertEqual(pin.image.thumbnail.id, old_thumbnail_id)
+
+        self.assertTrue(storage.exists(old_image_path))
+        self.assertTrue(storage.exists(old_thumbnail_path))
+
+        self.assertEqual(pin.image.thumbnail.image.name, old_thumbnail_path)
+
+        list_url = reverse("pin-list")
+        response = self.client.get(list_url, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        pin_in_list = None
+        for result in response.data['results']:
+            if result['id'] == pin_id:
+                pin_in_list = result
+                break
+
+        self.assertIsNotNone(pin_in_list)
+        self.assertEqual(pin_in_list['url'], old_url)
+        self.assertEqual(pin_in_list['image']['thumbnail']['image'], pin_data['image']['thumbnail']['image'])
+
+    @mock.patch('requests.get', mock_requests_get)
+    def test_database_transaction_failure_keeps_old_preview(self):
+        from django.db import transaction
+        from core import models as core_models
+
+        url1 = 'http://testserver.com/mocked/logo-01.png'
+        url2 = 'http://testserver.com/mocked/logo-02.png'
+
+        pin_data = self._create_pin_with_mock(url1, mock_requests_get)
+        pin_id = pin_data['id']
+
+        pin = Pin.objects.get(id=pin_id)
+        old_url = pin.url
+        old_thumbnail_url = pin_data['image']['thumbnail']['image']
+        old_thumbnail_name = pin.image.thumbnail.image.name
+        old_image_name = pin.image.image.name
+
+        storage = pin.image.image.storage
+        self.assertTrue(storage.exists(old_image_name))
+        self.assertTrue(storage.exists(old_thumbnail_name))
+
+        def mock_requests_get_new_image(url, **kwargs):
+            if 'logo-02' in url:
+                response = mock.Mock()
+                response.content = open('docs/src/imgs/logo-light.png', 'rb').read()
+                return response
+            return mock_requests_get(url, **kwargs)
+
+        def failing_hook(*args, **kwargs):
+            raise Exception("Simulated database failure during transaction")
+
+        response = None
+        try:
+            with mock.patch('requests.get', mock_requests_get_new_image):
+                core_models.Image.objects._test_hook_after_delete = failing_hook
+                try:
+                    pin_url = reverse("pin-detail", kwargs={"pk": pin_id})
+                    patch_data = {'url': url2}
+                    response = self.client.patch(pin_url, data=patch_data, format="json")
+                finally:
+                    if hasattr(core_models.Image.objects, '_test_hook_after_delete'):
+                        delattr(core_models.Image.objects, '_test_hook_after_delete')
+        except Exception:
+            pass
+
+        try:
+            from django.db import connections
+            for conn in connections.all():
+                conn.close()
+        except Exception:
+            pass
+
+        self.assertIsNotNone(response)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+        self.assertIn('url', response.data)
+
+        pin.refresh_from_db()
+        pin.image.refresh_from_db()
+
+        self.assertEqual(pin.url, old_url)
+        self.assertTrue(storage.exists(old_image_name))
+        self.assertTrue(storage.exists(old_thumbnail_name))
+
+        detail_url = reverse("pin-detail", kwargs={"pk": pin_id})
+        response = self.client.get(detail_url, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['url'], old_url)
+        self.assertEqual(
+            response.data['image']['thumbnail']['image'],
+            old_thumbnail_url
+        )
+
+        list_url = reverse("pin-list")
+        response = self.client.get(list_url, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        pin_in_list = None
+        for result in response.data['results']:
+            if result['id'] == pin_id:
+                pin_in_list = result
+                break
+
+        self.assertIsNotNone(pin_in_list)
+        self.assertEqual(pin_in_list['url'], old_url)
+        self.assertEqual(
+            pin_in_list['image']['thumbnail']['image'],
+            old_thumbnail_url
+        )
+
+    @mock.patch('requests.get', mock_requests_get)
+    def test_partial_thumbnail_failure_no_orphan_files(self):
+        from django_images import utils as django_images_utils
+
+        url1 = 'http://testserver.com/mocked/logo-01.png'
+        url2 = 'http://testserver.com/mocked/logo-02.png'
+
+        pin_data = self._create_pin_with_mock(url1, mock_requests_get)
+        pin_id = pin_data['id']
+
+        pin = Pin.objects.get(id=pin_id)
+        old_thumbnail_paths = [
+            pin.image.thumbnail.image.name,
+            pin.image.square.image.name,
+            pin.image.standard.image.name,
+        ]
+        storage = pin.image.image.storage
+
+        def mock_requests_get_new_image(url, **kwargs):
+            if 'logo-02' in url:
+                response = mock.Mock()
+                response.content = open('docs/src/imgs/logo-light.png', 'rb').read()
+                return response
+            return mock_requests_get(url, **kwargs)
+
+        call_count = [0]
+        original_write_image_in_memory = django_images_utils.write_image_in_memory
+
+        def failing_write_image_in_memory(img):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                raise IOError("Simulated file write failure on second thumbnail")
+            return original_write_image_in_memory(img)
+
+        try:
+            with mock.patch('requests.get', mock_requests_get_new_image), \
+                 mock.patch.object(django_images_utils, 'write_image_in_memory', failing_write_image_in_memory):
+                pin_url = reverse("pin-detail", kwargs={"pk": pin_id})
+                patch_data = {'url': url2}
+                response = self.client.patch(pin_url, data=patch_data, format="json")
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        finally:
+            django_images_utils.write_image_in_memory = original_write_image_in_memory
+
+        for path in old_thumbnail_paths:
+            self.assertTrue(
+                storage.exists(path),
+                f"Old thumbnail {path} should exist after failure"
+            )
+
+        pin.refresh_from_db()
+        self.assertTrue(pin.image.thumbnail.image.name in old_thumbnail_paths)
+        self.assertTrue(pin.image.square.image.name in old_thumbnail_paths)
+        self.assertTrue(pin.image.standard.image.name in old_thumbnail_paths)

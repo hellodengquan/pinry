@@ -88,8 +88,14 @@ class ImageManager(models.Manager):
         return image
 
     def refresh_for_url(self, image_instance, url, referer=None):
+        from django.db import transaction
+        from django.db.models.signals import post_delete
+        from django_images.models import Image as DjangoImage
+        from django_images.models import delete_image_files
+
         normalized_url = normalize_url(url)
         normalized_referer = normalize_url(referer) if referer else normalized_url
+
         try:
             obj, buf = self._fetch_image_content(normalized_url, normalized_referer)
         except requests.RequestException:
@@ -100,35 +106,132 @@ class ImageManager(models.Manager):
         old_image_path = image_instance.image.name
         storage = image_instance.image.storage
 
-        old_thumbnails = list(image_instance.thumbnail_set.all())
-        old_thumbnail_paths = [thumb.image.name for thumb in old_thumbnails if thumb.image.name]
-        old_thumbnail_ids = [thumb.id for thumb in old_thumbnails]
+        old_thumbnail_info = [
+            {'id': t.id, 'path': t.image.name}
+            for t in image_instance.thumbnail_set.all()
+            if t.image.name
+        ]
 
-        image_instance.image = obj
-        image_instance.save()
+        temp_image = None
+        new_image_content = None
+        new_image_name = None
+        new_thumbnail_bufs = None
+        try:
+            temp_image = DjangoImage.objects.create(image=obj)
+            Thumbnail.objects.get_or_create_at_sizes(temp_image, settings.IMAGE_SIZES.keys())
 
-        if old_thumbnail_ids:
+            temp_image.image.open()
+            new_image_content = temp_image.image.read()
+            new_image_name = temp_image.image.name.split('/')[-1]
+            temp_image.image.close()
+
+            new_thumbnail_bufs = {}
+            for thumb in temp_image.thumbnail_set.all():
+                thumb.image.open()
+                content = thumb.image.read()
+                thumb.image.close()
+                new_thumbnail_bufs[thumb.size] = {
+                    'content': content,
+                    'name': thumb.image.name.split('/')[-1],
+                }
+
+        except Exception:
+            if temp_image:
+                try:
+                    temp_image.delete()
+                except Exception:
+                    pass
+            return None, False
+
+        new_thumbnail_paths = []
+        new_image_saved_name = None
+        success = False
+        try:
+            sid = transaction.savepoint()
+            from io import BytesIO
+            from django.core.files.uploadedfile import InMemoryUploadedFile
+            from django.db.models.signals import post_save
+            from django_images.models import original_changed
+
+            post_delete.disconnect(delete_image_files)
+            post_save.disconnect(original_changed)
             try:
-                from django.db import transaction
-                with transaction.atomic():
+                image_buf = BytesIO(new_image_content)
+                new_image_saved_name = storage.save(new_image_name, image_buf)
+
+                image_instance.image.name = new_image_saved_name
+                image_instance.save()
+
+                if old_thumbnail_info:
+                    old_ids = [info['id'] for info in old_thumbnail_info]
                     from django_images.models import Thumbnail as ThumbnailModel
-                    deleted = ThumbnailModel.objects.filter(id__in=old_thumbnail_ids).delete()
+                    ThumbnailModel.objects.filter(id__in=old_ids).delete()
+
+                if hasattr(image_instance, '_prefetched_objects_cache'):
+                    image_instance._prefetched_objects_cache.pop('thumbnail_set', None)
+
+                if hasattr(self, '_test_hook_after_delete'):
+                    self._test_hook_after_delete()
+
+                for size, data in new_thumbnail_bufs.items():
+                    content_buf = BytesIO(data['content'])
+                    thumb_saved_name = storage.save(data['name'], content_buf)
+                    new_thumb = image_instance.thumbnail_set.create(
+                        size=size, image=thumb_saved_name
+                    )
+                    new_thumbnail_paths.append(thumb_saved_name)
+            finally:
+                post_delete.connect(delete_image_files)
+                post_save.connect(original_changed)
+
+            transaction.savepoint_commit(sid)
+            success = True
+
+        except Exception as e:
+            success = False
+            try:
+                transaction.savepoint_rollback(sid)
             except Exception:
                 pass
+            try:
+                from django.db import connection
+                if connection.needs_rollback:
+                    connection.rollback()
+            except Exception:
+                pass
+            if new_image_saved_name:
+                try:
+                    if storage.exists(new_image_saved_name):
+                        storage.delete(new_image_saved_name)
+                except Exception:
+                    pass
 
-        if hasattr(image_instance, '_prefetched_objects_cache'):
-            image_instance._prefetched_objects_cache.pop('thumbnail_set', None)
-
-        Thumbnail.objects.create_at_sizes(image_instance, settings.IMAGE_SIZES.keys())
-
-        if IMAGE_AUTO_DELETE:
-            for path in old_thumbnail_paths:
+        if not success:
+            for path in new_thumbnail_paths:
                 try:
                     if storage.exists(path):
                         storage.delete(path)
                 except Exception:
                     pass
+            if temp_image:
+                try:
+                    temp_image.delete()
+                except Exception:
+                    pass
+            return None, False
 
+        try:
+            temp_image.delete()
+        except Exception:
+            pass
+
+        if IMAGE_AUTO_DELETE:
+            for info in old_thumbnail_info:
+                try:
+                    if storage.exists(info['path']):
+                        storage.delete(info['path'])
+                except Exception:
+                    pass
             if old_image_path:
                 try:
                     if storage.exists(old_image_path):
