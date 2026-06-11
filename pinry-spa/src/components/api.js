@@ -1,7 +1,27 @@
 import axios from 'axios';
 import storage from './utils/storage';
+import localeUtils from './utils/i18n';
 
 const API_PREFIX = '/api/v2/';
+
+function getCurrentLocale() {
+  return localStorage.getItem('localeCode') || (navigator.language || 'en').split('-')[0];
+}
+
+function lookupErrorKey(code, fallbackKey = null) {
+  const locale = getCurrentLocale();
+  const messages = localeUtils.messages[locale] || localeUtils.messages.en;
+  const specificKey = `ERROR_${code}`;
+  if (messages[specificKey]) return messages[specificKey];
+  if (fallbackKey && messages[fallbackKey]) return messages[fallbackKey];
+
+  if (code !== null && typeof code === 'number') {
+    const prefix = Math.floor(code / 100) * 100;
+    const prefixKey = `ERROR_${prefix}`;
+    if (messages[prefixKey]) return messages[prefixKey];
+  }
+  return null;
+}
 
 class ApiError {
   constructor(code, message, detail, fieldErrors, rawData, status) {
@@ -100,13 +120,18 @@ function getFieldErrors(errorData) {
   return extractFieldErrorsFromLegacy(errorData);
 }
 
-function getErrorMessage(errorData) {
+function getErrorMessage(errorData, fallbackKey = null) {
   if (!errorData) return '';
   if (errorData instanceof ApiError) {
-    return errorData.message;
+    const translated = lookupErrorKey(errorData.code, fallbackKey);
+    if (translated) return translated;
+    if (errorData.message) return errorData.message;
+    return '';
   }
   if (typeof errorData === 'string') return errorData;
   if (typeof errorData !== 'object') return '';
+  const translated = lookupErrorKey(errorData.code, fallbackKey);
+  if (translated) return translated;
   if (errorData.message) return errorData.message;
   if (errorData.detail && typeof errorData.detail === 'string') return errorData.detail;
   return '';
@@ -126,6 +151,17 @@ function getErrorDetail(errorData) {
     return errorData.detail;
   }
   return errorData.detail || null;
+}
+
+function resolveErrorMessage(apiError, fallbackKey = null) {
+  const code = apiError && getErrorCode(apiError);
+  const translated = lookupErrorKey(code, fallbackKey);
+  if (translated) return translated;
+  const backendMsg = getErrorMessage(apiError);
+  if (backendMsg) return backendMsg;
+  const locale = getCurrentLocale();
+  const messages = localeUtils.messages[locale] || localeUtils.messages.en;
+  return messages.ERROR_50000 || 'Unknown error';
 }
 
 const Board = {
@@ -416,4 +452,6 @@ export default {
   getErrorCode,
   getErrorDetail,
   parseErrorData,
+  resolveErrorMessage,
+  lookupErrorKey,
 };

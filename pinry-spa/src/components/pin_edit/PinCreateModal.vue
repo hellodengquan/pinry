@@ -284,12 +284,8 @@ export default {
         },
       ).catch((error) => {
         const apiError = error.apiError || API.parseErrorData(error.response && error.response.data);
-        const msg = API.getErrorMessage(apiError);
-        if (msg) {
-          self.$buefy.toast.open({ type: 'is-danger', message: msg });
-        } else {
-          self.$buefy.toast.open({ type: 'is-danger', message: 'Cannot create pin' });
-        }
+        const msg = API.resolveErrorMessage(apiError, 'ERROR_PIN_CREATE');
+        self.$buefy.toast.open({ type: 'is-danger', message: msg });
         self.pinModel.markFieldsAsDanger(apiError);
         loading.close();
       });

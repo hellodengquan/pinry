@@ -84,7 +84,7 @@ export default {
             },
             (error) => {
               const apiError = error && (error.apiError || API.parseErrorData(error.response && error.response.data));
-              const msg = API.getErrorMessage(apiError) || 'Failed to Remove Pin';
+              const msg = API.resolveErrorMessage(apiError, 'ERROR_PIN_REMOVE');
               this.$buefy.toast.open(
                 { type: 'is-danger', message: msg },
               );
@@ -115,7 +115,7 @@ export default {
             },
             (error) => {
               const apiError = error && (error.apiError || API.parseErrorData(error.response && error.response.data));
-              const msg = API.getErrorMessage(apiError) || 'Failed to delete Pin';
+              const msg = API.resolveErrorMessage(apiError, 'ERROR_PIN_DELETE');
               this.$buefy.toast.open(
                 { type: 'is-danger', message: msg },
               );

@@ -101,7 +101,7 @@ export default {
         (apiError) => {
           if (apiError && apiError.status === 401) {
             this.$buefy.toast.open(
-              { type: 'is-danger', message: apiError.message || 'sign up of this site closed by owner' },
+              { type: 'is-danger', message: api.resolveErrorMessage(apiError, 'ERROR_SIGNUP_CLOSED') },
             );
           } else {
             self.helper.markFieldsAsDanger(apiError);

@@ -72,7 +72,7 @@ export default {
           },
           (error) => {
             const apiError = error && (error.apiError || API.parseErrorData(error.response && error.response.data));
-            const msg = API.getErrorMessage(apiError) || 'Failed to add pin to boards';
+            const msg = API.resolveErrorMessage(apiError, 'ERROR_PIN_ADD_TO_BOARD');
             this.$buefy.toast.open(
               {
                 message: msg,

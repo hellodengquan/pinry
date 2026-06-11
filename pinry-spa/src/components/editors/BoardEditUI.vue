@@ -56,7 +56,7 @@ export default {
             },
             (error) => {
               const apiError = error && (error.apiError || API.parseErrorData(error.response && error.response.data));
-              const msg = API.getErrorMessage(apiError) || 'Failed to delete Board';
+              const msg = API.resolveErrorMessage(apiError, 'ERROR_BOARD_DELETE');
               this.$buefy.toast.open(
                 { type: 'is-danger', message: msg },
               );
