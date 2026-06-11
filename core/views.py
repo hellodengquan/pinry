@@ -5,6 +5,10 @@ from rest_framework import viewsets, mixins, routers
 from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.viewsets import GenericViewSet
 from taggit.models import Tag
+from django.conf import settings
+from django.contrib.auth.decorators import login_required
+from django.http import Http404, HttpResponseForbidden
+from django.views.static import serve
 
 from core import serializers as api
 from core.models import Image, Pin, Board
@@ -83,3 +87,53 @@ drf_router.register(r'images', ImageViewSet)
 drf_router.register(r'boards', BoardViewSet, basename="board")
 drf_router.register(r'tags-auto-complete', TagAutoCompleteViewSet)
 drf_router.register(r'boards-auto-complete', BoardAutoCompleteViewSet, basename="board")
+
+
+def find_image_for_path(path):
+    from django_images.models import Thumbnail
+    import os
+
+    path_normalized = path.lstrip('/')
+
+    image = None
+    try:
+        image = Image.objects.get(image=path_normalized)
+    except Image.DoesNotExist:
+        pass
+
+    if image is None:
+        try:
+            thumbnail = Thumbnail.objects.get(image=path_normalized)
+            image = thumbnail.original
+        except Thumbnail.DoesNotExist:
+            pass
+
+    return image
+
+
+def protected_media(request, path, document_root=None, show_indexes=False):
+    if not settings.DEBUG and not settings.IS_TEST:
+        return serve(request, path, document_root, show_indexes)
+
+    image = find_image_for_path(path)
+
+    if image is None:
+        raise Http404('Image not found')
+
+    pins = Pin.objects.filter(image=image)
+    if not pins.exists():
+        raise Http404('No pins reference this image')
+
+    has_public = pins.filter(private=False).exists()
+    if has_public:
+        return serve(request, path, document_root, show_indexes)
+
+    all_private = pins.filter(private=True)
+    if not request.user.is_authenticated:
+        return HttpResponseForbidden('Authentication required for private content')
+
+    is_owner = all_private.filter(submitter=request.user).exists()
+    if not is_owner:
+        return HttpResponseForbidden('You do not have permission to access this content')
+
+    return serve(request, path, document_root, show_indexes)

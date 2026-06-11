@@ -1473,3 +1473,249 @@ class CrossUserPermissionMatrixTests(APITestCase):
             reverse("pin-detail", kwargs={"pk": self.a_private_pin.id})
         )
         self.assertEqual(resp.status_code, 404)
+
+
+class MediaDirectLinkPermissionTests(APITestCase):
+    """媒体文件直链访问权限测试
+    验证匿名用户和第三方用户是否可以绕过 API 接口，
+    通过直接请求媒体文件地址来访问私有图钉的原图和缩略图
+    """
+
+    def setUp(self):
+        super(MediaDirectLinkPermissionTests, self).setUp()
+        self.owner = create_user("media_owner")
+        self.other_user = create_user("media_other")
+
+        with mock.patch('requests.get', mock_requests_get):
+            self.image1 = create_image()
+            self.image2 = create_image()
+            self.image3 = create_image()
+            self.image4 = create_image()
+
+        self.public_pin = create_pin(self.owner, self.image1, [])
+        self.public_pin.private = False
+        self.public_pin.save()
+
+        self.private_pin = create_pin(self.owner, self.image2, [])
+        self.private_pin.private = True
+        self.private_pin.save()
+
+        self.other_public_pin = create_pin(self.other_user, self.image3, [])
+        self.other_public_pin.private = False
+        self.other_public_pin.save()
+
+        self.other_private_pin = create_pin(self.other_user, self.image4, [])
+        self.other_private_pin.private = True
+        self.other_private_pin.save()
+
+    def tearDown(self):
+        _teardown_models()
+
+    def _get_image_urls(self, pin):
+        from django_images.models import Thumbnail
+
+        original_url = pin.image.image.url
+
+        thumbnail_urls = {}
+        try:
+            thumbnail = pin.image.get_by_size('thumbnail')
+            thumbnail_urls['thumbnail'] = thumbnail.image.url
+        except Thumbnail.DoesNotExist:
+            pass
+
+        try:
+            standard = pin.image.get_by_size('standard')
+            thumbnail_urls['standard'] = standard.image.url
+        except Thumbnail.DoesNotExist:
+            pass
+
+        try:
+            square = pin.image.get_by_size('square')
+            thumbnail_urls['square'] = square.image.url
+        except Thumbnail.DoesNotExist:
+            pass
+
+        return original_url, thumbnail_urls
+
+    def test_anonymous_cannot_access_private_pin_original_image(self):
+        original_url, _ = self._get_image_urls(self.private_pin)
+        resp = self.client.get(original_url)
+        self.assertNotEqual(resp.status_code, 200)
+        self.assertIn(resp.status_code, [401, 403, 404])
+
+    def test_anonymous_cannot_access_private_pin_thumbnail(self):
+        _, thumbnail_urls = self._get_image_urls(self.private_pin)
+        for size, url in thumbnail_urls.items():
+            resp = self.client.get(url)
+            self.assertNotEqual(
+                resp.status_code, 200,
+                f"Anonymous could access {size} thumbnail of private pin via {url}"
+            )
+            self.assertIn(resp.status_code, [401, 403, 404])
+
+    def test_other_user_cannot_access_private_pin_original_image(self):
+        self.client.login(username=self.other_user.username, password='password')
+        original_url, _ = self._get_image_urls(self.private_pin)
+        resp = self.client.get(original_url)
+        self.assertNotEqual(resp.status_code, 200)
+        self.assertIn(resp.status_code, [401, 403, 404])
+
+    def test_other_user_cannot_access_private_pin_thumbnail(self):
+        self.client.login(username=self.other_user.username, password='password')
+        _, thumbnail_urls = self._get_image_urls(self.private_pin)
+        for size, url in thumbnail_urls.items():
+            resp = self.client.get(url)
+            self.assertNotEqual(
+                resp.status_code, 200,
+                f"Other user could access {size} thumbnail of private pin via {url}"
+            )
+            self.assertIn(resp.status_code, [401, 403, 404])
+
+    def test_owner_can_access_own_private_pin_original_image(self):
+        self.client.login(username=self.owner.username, password='password')
+        original_url, _ = self._get_image_urls(self.private_pin)
+        resp = self.client.get(original_url)
+        self.assertEqual(resp.status_code, 200)
+
+    def test_owner_can_access_own_private_pin_thumbnail(self):
+        self.client.login(username=self.owner.username, password='password')
+        _, thumbnail_urls = self._get_image_urls(self.private_pin)
+        for size, url in thumbnail_urls.items():
+            resp = self.client.get(url)
+            self.assertEqual(
+                resp.status_code, 200,
+                f"Owner could not access {size} thumbnail of own private pin via {url}"
+            )
+
+    def test_anonymous_can_access_public_pin_original_image(self):
+        original_url, _ = self._get_image_urls(self.public_pin)
+        resp = self.client.get(original_url)
+        self.assertEqual(resp.status_code, 200)
+
+    def test_anonymous_can_access_public_pin_thumbnail(self):
+        _, thumbnail_urls = self._get_image_urls(self.public_pin)
+        for size, url in thumbnail_urls.items():
+            resp = self.client.get(url)
+            self.assertEqual(
+                resp.status_code, 200,
+                f"Anonymous could not access {size} thumbnail of public pin via {url}"
+            )
+
+    def test_other_user_can_access_public_pin_original_image(self):
+        self.client.login(username=self.other_user.username, password='password')
+        original_url, _ = self._get_image_urls(self.public_pin)
+        resp = self.client.get(original_url)
+        self.assertEqual(resp.status_code, 200)
+
+    def test_other_user_can_access_other_public_pin_thumbnail(self):
+        self.client.login(username=self.other_user.username, password='password')
+        _, thumbnail_urls = self._get_image_urls(self.public_pin)
+        for size, url in thumbnail_urls.items():
+            resp = self.client.get(url)
+            self.assertEqual(
+                resp.status_code, 200,
+                f"Other user could not access {size} thumbnail of public pin via {url}"
+            )
+
+    def test_anonymous_cannot_access_other_private_pin_original_image(self):
+        original_url, _ = self._get_image_urls(self.other_private_pin)
+        resp = self.client.get(original_url)
+        self.assertNotEqual(resp.status_code, 200)
+        self.assertIn(resp.status_code, [401, 403, 404])
+
+    def test_owner_cannot_access_other_private_pin_original_image(self):
+        self.client.login(username=self.owner.username, password='password')
+        original_url, _ = self._get_image_urls(self.other_private_pin)
+        resp = self.client.get(original_url)
+        self.assertNotEqual(resp.status_code, 200)
+        self.assertIn(resp.status_code, [401, 403, 404])
+
+    def test_logout_user_cannot_access_private_pin_image(self):
+        self.client.login(username=self.owner.username, password='password')
+        original_url, _ = self._get_image_urls(self.private_pin)
+        resp_before = self.client.get(original_url)
+        self.assertEqual(resp_before.status_code, 200)
+
+        self.client.logout()
+        resp_after = self.client.get(original_url)
+        self.assertNotEqual(resp_after.status_code, 200)
+        self.assertIn(resp_after.status_code, [401, 403, 404])
+
+    def test_pin_privacy_toggle_blocks_media_access(self):
+        self.client.login(username=self.owner.username, password='password')
+        with mock.patch('requests.get', mock_requests_get):
+            image = create_image()
+        test_pin = create_pin(self.owner, image, [])
+        test_pin.private = False
+        test_pin.save()
+
+        original_url, thumbnail_urls = self._get_image_urls(test_pin)
+
+        resp_original = self.client.get(original_url)
+        self.assertEqual(resp_original.status_code, 200)
+
+        test_pin.private = True
+        test_pin.save()
+
+        self.client.logout()
+        resp_original = self.client.get(original_url)
+        self.assertNotEqual(resp_original.status_code, 200)
+        self.assertIn(resp_original.status_code, [401, 403, 404])
+
+        for size, url in thumbnail_urls.items():
+            resp = self.client.get(url)
+            self.assertNotEqual(
+                resp.status_code, 200,
+                f"Could still access {size} thumbnail after pin was made private"
+            )
+
+    def test_media_urls_return_consistent_with_api(self):
+        pin_url = reverse("pin-detail", kwargs={"pk": self.private_pin.id})
+
+        resp_api = self.client.get(pin_url)
+        self.assertEqual(resp_api.status_code, 404)
+
+        original_url, thumbnail_urls = self._get_image_urls(self.private_pin)
+        resp_media = self.client.get(original_url)
+
+        if resp_api.status_code in [401, 403, 404]:
+            self.assertNotEqual(
+                resp_media.status_code, 200,
+                "API blocks access but media direct link allows it - SECURITY VULNERABILITY"
+            )
+            self.assertIn(resp_media.status_code, [401, 403, 404])
+
+    def test_nonexistent_media_path_returns_404(self):
+        resp = self.client.get('/media/image/original/by-md5/nonexistent/path/image.jpg')
+        self.assertEqual(resp.status_code, 404)
+
+    def test_board_private_does_not_affect_pin_media_permissions(self):
+        with mock.patch('requests.get', mock_requests_get):
+            image = create_image()
+        pin = create_pin(self.owner, image, [])
+        pin.private = False
+        pin.save()
+
+        board = Board.objects.create(
+            name="private_media_board",
+            submitter=self.owner,
+            private=True,
+        )
+        board.pins.add(pin)
+
+        original_url, _ = self._get_image_urls(pin)
+        resp = self.client.get(original_url)
+        self.assertEqual(resp.status_code, 200)
+
+    def test_third_user_cannot_access_owners_private_pin_thumbnail(self):
+        third_user = create_user("third_media_user")
+        self.client.login(username=third_user.username, password='password')
+
+        _, thumbnail_urls = self._get_image_urls(self.private_pin)
+        for size, url in thumbnail_urls.items():
+            resp = self.client.get(url)
+            self.assertNotEqual(
+                resp.status_code, 200,
+                f"Third user could access {size} thumbnail of owner's private pin via {url}"
+            )
+            self.assertIn(resp.status_code, [401, 403, 404])
