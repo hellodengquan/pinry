@@ -19,7 +19,7 @@ from core.serializers import UserSerializer
 from users.models import User
 
 
-def _error_response(code, message=None, detail=None, status_code=None):
+def _error_response(code, message=None, detail=None, status_code=None, field_error_codes=None):
     if status_code is None:
         from core.exceptions import get_http_status_from_error_code
         status_code = get_http_status_from_error_code(code)
@@ -39,6 +39,9 @@ def _error_response(code, message=None, detail=None, status_code=None):
                     error_data[key] = value
     elif isinstance(detail, str):
         error_data["non_field_errors"] = detail
+
+    if field_error_codes:
+        error_data["field_error_codes"] = field_error_codes
 
     error_data["detail"] = truncate_detail(error_data["detail"])
 
@@ -98,13 +101,17 @@ def login_user(request):
             message=_("Invalid JSON format"),
             detail={"non_field_errors": _("Invalid JSON format")},
             status_code=status.HTTP_400_BAD_REQUEST,
+            field_error_codes={"non_field_errors": "parse_error"},
         )
 
     errors = {}
+    field_codes = {}
     if 'username' not in data:
         errors["username"] = _("This field is required.")
+        field_codes["username"] = "required"
     if 'password' not in data:
         errors["password"] = _("This field is required.")
+        field_codes["password"] = "required"
 
     if errors:
         return _error_response(
@@ -112,6 +119,7 @@ def login_user(request):
             message=_("Validation error"),
             detail=errors,
             status_code=status.HTTP_400_BAD_REQUEST,
+            field_error_codes=field_codes,
         )
 
     user = authenticate(
@@ -125,6 +133,7 @@ def login_user(request):
             message=_("Username and password doesn't match."),
             detail={"password": _("Username and password doesn't match.")},
             status_code=status.HTTP_400_BAD_REQUEST,
+            field_error_codes={"password": "authentication_failed"},
         )
 
     login(request, user)

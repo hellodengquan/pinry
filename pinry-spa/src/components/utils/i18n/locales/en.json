@@ -28,6 +28,18 @@
     "ERROR_PIN_REMOVE": "Failed to remove pin from board",
     "ERROR_BOARD_DELETE": "Failed to delete board",
 
+    "FIELD_ERROR_required": "This field is required.",
+    "FIELD_ERROR_blank": "This field may not be blank.",
+    "FIELD_ERROR_invalid": "Please enter a valid value.",
+    "FIELD_ERROR_min_length": "Please enter at least {min_length} characters.",
+    "FIELD_ERROR_max_length": "Please enter no more than {max_length} characters.",
+    "FIELD_ERROR_unique": "This value has already been used. Please choose another.",
+    "FIELD_ERROR_password_mismatch": "The two passwords you entered do not match.",
+    "FIELD_ERROR_authentication_failed": "Incorrect username or password.",
+    "FIELD_ERROR_parse_error": "Invalid request format.",
+    "FIELD_ERROR_invalid_email": "Please enter a valid email address.",
+    "FIELD_ERROR_null": "This field may not be null.",
+
     "NewPinTitle": "New Pin",
     "EditPinTitle": "Edit Pin",
     "BoardCreateTitle": "Create Board",

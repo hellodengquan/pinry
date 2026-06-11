@@ -28,6 +28,18 @@
   "ERROR_PIN_REMOVE": "从画板中移除 Pin 失败",
   "ERROR_BOARD_DELETE": "删除画板失败",
 
+  "FIELD_ERROR_required": "此项为必填项。",
+  "FIELD_ERROR_blank": "此项不能为空。",
+  "FIELD_ERROR_invalid": "请输入有效的内容。",
+  "FIELD_ERROR_min_length": "请至少输入 {min_length} 个字符。",
+  "FIELD_ERROR_max_length": "输入内容不能超过 {max_length} 个字符。",
+  "FIELD_ERROR_unique": "该值已被使用，请换一个。",
+  "FIELD_ERROR_password_mismatch": "两次输入的密码不一致。",
+  "FIELD_ERROR_authentication_failed": "用户名或密码错误。",
+  "FIELD_ERROR_parse_error": "请求格式不正确。",
+  "FIELD_ERROR_invalid_email": "请输入有效的邮箱地址。",
+  "FIELD_ERROR_null": "此项不能为空。",
+
   "NewPinTitle": "创建 Pin",
   "EditPinTitle": "编辑 Pin",
   "BoardCreateTitle": "创建画板",

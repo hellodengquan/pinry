@@ -118,12 +118,39 @@ def _extract_field_errors(detail):
     return {"non_field_errors": str(detail)}
 
 
+def _extract_field_error_codes(detail):
+    if isinstance(detail, ErrorDetail):
+        return detail.code
+    if isinstance(detail, dict):
+        result = {}
+        for key, value in detail.items():
+            if isinstance(value, list) and value:
+                if isinstance(value[0], ErrorDetail):
+                    result[key] = value[0].code
+                elif isinstance(value[0], dict):
+                    result[key] = _extract_field_error_codes(value[0])
+                else:
+                    result[key] = None
+            elif isinstance(value, ErrorDetail):
+                result[key] = value.code
+            elif isinstance(value, dict):
+                result[key] = _extract_field_error_codes(value)
+            else:
+                result[key] = None
+        return result
+    if isinstance(detail, list) and detail:
+        if isinstance(detail[0], ErrorDetail):
+            return {"non_field_errors": detail[0].code}
+        return {"non_field_errors": None}
+    return {"non_field_errors": None}
+
+
 def custom_exception_handler(exc, context):
     if isinstance(exc, APIException):
         status_code = exc.status_code
         error_code = exc.code
         message = exc.message if exc.message else get_error_message(error_code)
-        detail = exc.detail
+        raw_detail = exc.detail
     else:
         response = drf_exception_handler(exc, context)
         if response is None:
@@ -134,9 +161,21 @@ def custom_exception_handler(exc, context):
         message = _get_message_from_exception(exc, error_code)
 
         if hasattr(exc, 'detail'):
-            detail = _normalize_detail(exc.detail)
+            raw_detail = exc.detail
         else:
-            detail = str(exc)
+            raw_detail = str(exc)
+
+    if isinstance(exc, APIException) and isinstance(exc.detail, dict):
+        field_error_codes_raw = _extract_field_error_codes(exc.detail)
+    elif hasattr(exc, 'detail'):
+        field_error_codes_raw = _extract_field_error_codes(exc.detail)
+    else:
+        field_error_codes_raw = {}
+
+    if isinstance(raw_detail, str):
+        detail = raw_detail
+    else:
+        detail = _normalize_detail(raw_detail) if not isinstance(raw_detail, str) else raw_detail
 
     detail = truncate_detail(detail)
 
@@ -148,6 +187,9 @@ def custom_exception_handler(exc, context):
 
     field_errors = _extract_field_errors(detail)
     error_response.update(field_errors)
+
+    if field_error_codes_raw:
+        error_response["field_error_codes"] = field_error_codes_raw
 
     if isinstance(exc, APIException):
         return Response(error_response, status=status_code)

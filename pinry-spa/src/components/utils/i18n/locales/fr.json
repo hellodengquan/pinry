@@ -28,6 +28,18 @@
     "ERROR_PIN_REMOVE": "Échec du retrait de la fiche du tableau",
     "ERROR_BOARD_DELETE": "Échec de la suppression du tableau",
 
+    "FIELD_ERROR_required": "Ce champ est requis.",
+    "FIELD_ERROR_blank": "Ce champ ne peut pas être vide.",
+    "FIELD_ERROR_invalid": "Veuillez saisir une valeur valide.",
+    "FIELD_ERROR_min_length": "Veuillez saisir au moins {min_length} caractères.",
+    "FIELD_ERROR_max_length": "Veuillez saisir au maximum {max_length} caractères.",
+    "FIELD_ERROR_unique": "Cette valeur est déjà utilisée, veuillez en choisir une autre.",
+    "FIELD_ERROR_password_mismatch": "Les deux mots de passe ne correspondent pas.",
+    "FIELD_ERROR_authentication_failed": "Identifiant ou mot de passe incorrect.",
+    "FIELD_ERROR_parse_error": "Format de requête invalide.",
+    "FIELD_ERROR_invalid_email": "Veuillez saisir une adresse email valide.",
+    "FIELD_ERROR_null": "Ce champ ne peut pas être nul.",
+
     "NewPinTitle": "Nouvelle fiche",
     "EditPinTitle": "Éditer la fiche",
     "BoardCreateTitle": "Créer un tableau",

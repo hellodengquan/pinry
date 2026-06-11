@@ -57,9 +57,12 @@ class UserSerializer(serializers.HyperlinkedModelSerializer):
 
     def create(self, validated_data):
         if validated_data['password'] != validated_data['password_repeat']:
-            raise ValidationError(
+            raise serializers.ValidationError(
                 detail={
-                    "password_repeat": "Tow password doesn't match",
+                    "password_repeat": serializers.ErrorDetail(
+                        "Two passwords don't match",
+                        code="password_mismatch",
+                    ),
                 }
             )
         validated_data.pop('password_repeat')

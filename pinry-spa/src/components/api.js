@@ -23,14 +23,24 @@ function lookupErrorKey(code, fallbackKey = null) {
   return null;
 }
 
+function lookupFieldErrorKey(fieldCode) {
+  if (!fieldCode) return null;
+  const locale = getCurrentLocale();
+  const messages = localeUtils.messages[locale] || localeUtils.messages.en;
+  const key = `FIELD_ERROR_${fieldCode}`;
+  if (messages[key]) return messages[key];
+  return null;
+}
+
 class ApiError {
-  constructor(code, message, detail, fieldErrors, rawData, status) {
+  constructor(code, message, detail, fieldErrors, rawData, status, fieldErrorCodes) {
     this.code = code;
     this.message = message;
     this.detail = detail;
     this.fieldErrors = fieldErrors;
     this.data = rawData;
     this.status = status;
+    this.fieldErrorCodes = fieldErrorCodes || {};
   }
 }
 
@@ -81,17 +91,35 @@ function parseErrorData(data) {
       {},
       data,
       null,
+      {},
     );
   }
 
   const hasNewFormat = 'code' in data && 'message' in data && 'detail' in data;
+  const fieldErrorCodes = (data && data.field_error_codes) || {};
 
   if (hasNewFormat) {
     const { code, message, detail } = data;
-    return new ApiError(code, message || '', detail, extractFieldErrors(data), data, null);
+    return new ApiError(
+      code,
+      message || '',
+      detail,
+      extractFieldErrors(data),
+      data,
+      null,
+      fieldErrorCodes,
+    );
   }
 
-  return new ApiError(null, '', data, extractFieldErrorsFromLegacy(data), data, null);
+  return new ApiError(
+    null,
+    '',
+    data,
+    extractFieldErrorsFromLegacy(data),
+    data,
+    null,
+    fieldErrorCodes,
+  );
 }
 
 axios.interceptors.response.use(
@@ -103,21 +131,36 @@ axios.interceptors.response.use(
       apiError.status = err.response.status;
       enriched.apiError = apiError;
     } else {
-      enriched.apiError = new ApiError(null, err.message || 'Network error', null, {}, null, 0);
+      enriched.apiError = new ApiError(null, err.message || 'Network error', null, {}, null, 0, {});
     }
     return Promise.reject(enriched);
   },
 );
 
+function translateFieldErrors(fieldErrors, fieldErrorCodes) {
+  const result = {};
+  Object.entries(fieldErrors).forEach(([field, rawMsg]) => {
+    const code = fieldErrorCodes && fieldErrorCodes[field];
+    const translated = lookupFieldErrorKey(code);
+    result[field] = translated || rawMsg;
+  });
+  return result;
+}
+
 function getFieldErrors(errorData) {
   if (!errorData) return {};
   if (errorData instanceof ApiError) {
-    return errorData.fieldErrors;
+    return translateFieldErrors(errorData.fieldErrors, errorData.fieldErrorCodes);
   }
+  let fieldErrors;
+  let fieldErrorCodes = null;
   if (errorData && typeof errorData === 'object' && ('code' in errorData || 'message' in errorData)) {
-    return extractFieldErrors(errorData);
+    fieldErrors = extractFieldErrors(errorData);
+    fieldErrorCodes = errorData.field_error_codes || null;
+  } else {
+    fieldErrors = extractFieldErrorsFromLegacy(errorData);
   }
-  return extractFieldErrorsFromLegacy(errorData);
+  return translateFieldErrors(fieldErrors, fieldErrorCodes);
 }
 
 function getErrorMessage(errorData, fallbackKey = null) {
@@ -454,4 +497,6 @@ export default {
   parseErrorData,
   resolveErrorMessage,
   lookupErrorKey,
+  lookupFieldErrorKey,
+  translateFieldErrors,
 };
