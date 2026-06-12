@@ -81,6 +81,24 @@ const Pin = {
   createFromUploaded(jsonData) {
     return this.create(jsonData);
   },
+  forceCreate(jsonData) {
+    const data = { ...jsonData, force_create: true };
+    return this.create(data);
+  },
+  checkDuplicates(url, imageById) {
+    const apiUrl = `${API_PREFIX}pins/check_duplicates/`;
+    const params = {};
+    if (url) params.url = url;
+    if (imageById) params.image_by_id = imageById;
+    return axios.get(apiUrl, { params });
+  },
+  mergePins(sourcePinId, targetPinId) {
+    const url = `${API_PREFIX}pins/merge/`;
+    return axios.post(url, {
+      source_pin_id: sourcePinId,
+      target_pin_id: targetPinId,
+    });
+  },
   uploadImage(fileObject) {
     const url = `${API_PREFIX}images/`;
     const data = new FormData();

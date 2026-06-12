@@ -87,7 +87,6 @@ class Image(BaseImage):
 class Board(models.Model):
     class Meta:
         unique_together = ("submitter", "name")
-        index_together = ("submitter", "name")
 
     submitter = models.ForeignKey(User, on_delete=models.CASCADE)
     name = models.CharField(max_length=128, blank=False, null=False)
@@ -113,10 +112,44 @@ class Pin(models.Model):
     def __unicode__(self):
         return '%s - %s' % (self.submitter, self.published)
 
+    @staticmethod
+    def find_duplicates(url=None, image_hash=None, submitter=None, exclude_id=None):
+        from django.db.models import Q
+        query = Pin.objects.all()
+        if submitter:
+            query = query.filter(submitter=submitter)
+        if exclude_id:
+            query = query.exclude(id=exclude_id)
+        conditions = Q()
+        if url:
+            conditions |= Q(url=url)
+        if image_hash:
+            conditions |= Q(image__image_hash=image_hash)
+        if conditions:
+            query = query.filter(conditions)
+        return query.distinct().select_related('image', 'submitter')
+
+    def merge_from(self, other_pin):
+        for tag in other_pin.tags.all():
+            self.tags.add(tag)
+        for board in other_pin.pins.all():
+            board.pins.remove(other_pin)
+            board.pins.add(self)
+        if not self.description and other_pin.description:
+            self.description = other_pin.description
+        if not self.referer and other_pin.referer:
+            self.referer = other_pin.referer
+        self.save()
+        other_pin.delete()
+        return self
+
 
 @receiver(models.signals.post_delete, sender=Pin)
 def delete_pin_images(sender, instance, **kwargs):
     try:
-        instance.image.delete()
+        if instance.image_id:
+            other_pins = Pin.objects.filter(image_id=instance.image_id).exists()
+            if not other_pins:
+                instance.image.delete()
     except Image.DoesNotExist:
         pass

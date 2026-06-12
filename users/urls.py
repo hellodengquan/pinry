@@ -1,4 +1,5 @@
-from django.conf.urls import url, include
+from django.urls import path, include
+from django.urls import re_path as url
 
 from users.views import login_user
 from . import views

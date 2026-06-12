@@ -114,16 +114,7 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
         required=False,
     )
 
-    def create(self, validated_data):
-        if 'url' not in validated_data and\
-                'image_by_id' not in validated_data:
-            raise ValidationError(
-                detail={
-                    "url-or-image": "Either url or image_by_id is required."
-                },
-            )
-
-        submitter = self.context['request'].user
+    def get_image_for_creation(self, validated_data):
         if 'url' in validated_data and validated_data['url']:
             url = validated_data['url']
             image = Image.objects.create_for_url(
@@ -132,8 +123,29 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
             )
             if not image:
                 raise ValidationError({"url": "invalid image content"})
+            return image
+        elif 'image_by_id' in validated_data:
+            return validated_data.pop("image_by_id")
         else:
-            image = validated_data.pop("image_by_id")
+            raise ValidationError(
+                detail={
+                    "url-or-image": "Either url or image_by_id is required."
+                },
+            )
+
+    def find_duplicates(self, validated_data, image=None):
+        submitter = self.context['request'].user
+        url = validated_data.get('url')
+        image_hash = image.image_hash if image else None
+        return Pin.find_duplicates(
+            url=url,
+            image_hash=image_hash,
+            submitter=submitter,
+        )
+
+    def create(self, validated_data):
+        submitter = self.context['request'].user
+        image = self.get_image_for_creation(validated_data)
         tags = validated_data.pop('tag_list', [])
         pin = Pin.objects.create(submitter=submitter, image=image, **validated_data)
         if tags:
@@ -146,9 +158,31 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
             instance.tags.set(*tags)
         else:
             instance.tags.set()
-        # change for image-id or image is not allowed
         validated_data.pop('image_by_id', None)
         return super(PinSerializer, self).update(instance, validated_data)
+
+
+class PinMergeSerializer(serializers.Serializer):
+    source_pin_id = serializers.IntegerField(required=True, help_text="Source pin ID to merge from")
+    target_pin_id = serializers.IntegerField(required=True, help_text="Target pin ID to merge into")
+
+    def validate(self, attrs):
+        user = self.context['request'].user
+        try:
+            source_pin = Pin.objects.get(id=attrs['source_pin_id'])
+            target_pin = Pin.objects.get(id=attrs['target_pin_id'])
+        except Pin.DoesNotExist:
+            raise serializers.ValidationError("Pin not found")
+        if source_pin.submitter != user or target_pin.submitter != user:
+            raise serializers.ValidationError("You can only merge your own pins")
+        attrs['source_pin'] = source_pin
+        attrs['target_pin'] = target_pin
+        return attrs
+
+    def save(self, **kwargs):
+        source_pin = self.validated_data['source_pin']
+        target_pin = self.validated_data['target_pin']
+        return target_pin.merge_from(source_pin)
 
 
 class PinIdListField(serializers.ListField):

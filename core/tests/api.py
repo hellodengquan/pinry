@@ -286,3 +286,140 @@ class PinTests(APITestCase):
         uri = reverse("pin-detail", kwargs={"pk": pin.pk})
         self.client.delete(uri)
         self.assertEqual(Pin.objects.count(), 0)
+
+
+class PinDuplicateTests(APITestCase):
+
+    def setUp(self):
+        super(PinDuplicateTests, self).setUp()
+        self.user = create_user("default")
+        self.client.login(username=self.user.username, password='password')
+
+    def tearDown(self):
+        _teardown_models()
+
+    def test_should_detect_duplicate_by_url(self):
+        image = create_image()
+        url = 'http://testserver.com/mocked/duplicate.png'
+        create_pin(self.user, image, [])
+        Pin.objects.filter(id=Pin.objects.first().id).update(url=url)
+        create_url = reverse("pin-list")
+        post_data = {
+            'url': url,
+            'private': False,
+            'referer': 'http://testserver.com/',
+            'description': 'Duplicate pin',
+        }
+        with mock.patch('requests.get', mock_requests_get):
+            response = self.client.post(create_url, data=post_data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT, response.data)
+        self.assertTrue(response.data['duplicates_found'])
+        self.assertGreater(len(response.data['duplicates']), 0)
+
+    def test_should_detect_duplicate_by_image_hash(self):
+        image = create_image()
+        pin1 = create_pin(self.user, image, [])
+        create_url = reverse("pin-list")
+        post_data = {
+            'image_by_id': image.pk,
+            'private': False,
+            'referer': 'http://testserver.com/',
+            'description': 'Another pin with same image',
+        }
+        response = self.client.post(create_url, data=post_data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT, response.data)
+        self.assertTrue(response.data['duplicates_found'])
+
+    def test_should_force_create_when_duplicate_exists(self):
+        image = create_image()
+        pin1 = create_pin(self.user, image, [])
+        create_url = reverse("pin-list")
+        post_data = {
+            'image_by_id': image.pk,
+            'private': False,
+            'referer': 'http://testserver.com/',
+            'description': 'Forced creation',
+            'force_create': True,
+        }
+        response = self.client.post(create_url, data=post_data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(Pin.objects.count(), 2)
+
+    def test_check_duplicates_endpoint_with_url(self):
+        image = create_image()
+        url = 'http://testserver.com/mocked/check-dup.png'
+        pin = create_pin(self.user, image, [])
+        pin.url = url
+        pin.save()
+        check_url = reverse("pin-check-duplicates")
+        response = self.client.get(check_url, {'url': url}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['duplicates_found'])
+        self.assertGreater(response.data['count'], 0)
+
+    def test_check_duplicates_endpoint_with_image_id(self):
+        image = create_image()
+        pin = create_pin(self.user, image, [])
+        check_url = reverse("pin-check-duplicates")
+        response = self.client.get(check_url, {'image_by_id': image.pk}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['duplicates_found'])
+        self.assertGreater(response.data['count'], 0)
+
+    def test_merge_pins_preserves_tags(self):
+        image = create_image()
+        pin1 = create_pin(self.user, image, ['tag1', 'tag2'])
+        pin2 = create_pin(self.user, image, ['tag3', 'tag4'])
+        merge_url = reverse("pin-merge")
+        post_data = {
+            'source_pin_id': pin2.id,
+            'target_pin_id': pin1.id,
+        }
+        response = self.client.post(merge_url, data=post_data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['merged'])
+        pin1.refresh_from_db()
+        self.assertEqual(pin1.tags.count(), 4)
+        tag_names = [tag.name for tag in pin1.tags.all()]
+        self.assertIn('tag1', tag_names)
+        self.assertIn('tag2', tag_names)
+        self.assertIn('tag3', tag_names)
+        self.assertIn('tag4', tag_names)
+        self.assertEqual(Pin.objects.count(), 1)
+
+    def test_merge_pins_preserves_boards(self):
+        image = create_image()
+        pin1 = create_pin(self.user, image, [])
+        pin2 = create_pin(self.user, image, [])
+        board1 = Board.objects.create(name="board1", submitter=self.user)
+        board2 = Board.objects.create(name="board2", submitter=self.user)
+        board1.pins.add(pin1)
+        board2.pins.add(pin2)
+        merge_url = reverse("pin-merge")
+        post_data = {
+            'source_pin_id': pin2.id,
+            'target_pin_id': pin1.id,
+        }
+        response = self.client.post(merge_url, data=post_data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['merged'])
+        pin1.refresh_from_db()
+        board1.refresh_from_db()
+        board2.refresh_from_db()
+        self.assertTrue(board1.pins.filter(id=pin1.id).exists())
+        self.assertTrue(board2.pins.filter(id=pin1.id).exists())
+        self.assertEqual(board1.pins.count(), 1)
+        self.assertEqual(board2.pins.count(), 1)
+
+    def test_merge_pins_not_owned_by_user_should_fail(self):
+        image = create_image()
+        other_user = create_user("other")
+        pin1 = create_pin(self.user, image, [])
+        pin2 = create_pin(other_user, image, [])
+        merge_url = reverse("pin-merge")
+        post_data = {
+            'source_pin_id': pin2.id,
+            'target_pin_id': pin1.id,
+        }
+        response = self.client.post(merge_url, data=post_data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)

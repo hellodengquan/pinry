@@ -49,6 +49,7 @@ class Image(models.Model):
                               max_length=255)
     height = models.PositiveIntegerField(default=0, editable=False)
     width = models.PositiveIntegerField(default=0, editable=False)
+    image_hash = models.CharField(max_length=32, blank=True, null=True, db_index=True)
 
     def get_by_size(self, size):
         return self.thumbnail_set.get(size=size)
@@ -112,6 +113,22 @@ class Thumbnail(models.Model):
 
     def get_absolute_url(self):
         return self.image.url
+
+
+def calculate_image_hash(image_field):
+    hasher = hashlib.md5()
+    for chunk in image_field.chunks():
+        hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+@receiver(models.signals.pre_save, sender=Image)
+def set_image_hash(sender, instance, **kwargs):
+    if instance.image and not instance.image_hash:
+        try:
+            instance.image_hash = calculate_image_hash(instance.image)
+        except Exception:
+            pass
 
 
 @receiver(models.signals.post_save)

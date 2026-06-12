@@ -83,14 +83,61 @@
               ></FilterSelect>
             </div>
           </div>
+          <div v-if="duplicatePins.length > 0" class="duplicate-warning">
+            <div class="message is-warning">
+              <div class="message-header">
+                <p>Duplicate Pins Found</p>
+              </div>
+              <div class="message-body">
+                <p>We found {{ duplicatePins.length }} similar pin(s). You can:</p>
+                <ul>
+                  <li>Merge with an existing pin (tags and boards will be preserved)</li>
+                  <li>Create a new pin anyway</li>
+                </ul>
+                <div class="duplicate-pins-list">
+                  <div
+                    v-for="pin in duplicatePins"
+                    :key="pin.id"
+                    class="duplicate-pin-item"
+                    @click="selectDuplicatePin(pin)"
+                    :class="{ 'is-selected': selectedDuplicatePin && selectedDuplicatePin.id === pin.id }"
+                  >
+                    <div class="duplicate-pin-thumb">
+                      <img :src="pin.image.thumbnail.image" />
+                    </div>
+                    <div class="duplicate-pin-info">
+                      <p class="duplicate-pin-id">#{{ pin.id }}</p>
+                      <p class="duplicate-pin-desc">{{ pin.description || 'No description' }}</p>
+                      <p class="duplicate-pin-tags">
+                        <span v-for="tag in pin.tags" :key="tag" class="tag is-small">{{ tag }}</span>
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </section>
         <footer class="modal-card-foot">
           <button class="button" type="button" @click="$parent.close()">{{ $t("closeButton") }}</button>
-          <button
-            v-if="!isEdit"
-            @click="createPin"
-            class="button is-primary">{{ $t("pinCreateModalCreatePinButton") }}
-          </button>
+          <template v-if="!isEdit">
+            <button
+              v-if="duplicatePins.length > 0 && selectedDuplicatePin"
+              @click="mergeWithSelected"
+              class="button is-info">
+              Merge with #{{ selectedDuplicatePin.id }}
+            </button>
+            <button
+              v-if="duplicatePins.length > 0"
+              @click="forceCreatePin"
+              class="button">
+              Create Anyway
+            </button>
+            <button
+              @click="createPin"
+              class="button is-primary">{{ $t("pinCreateModalCreatePinButton") }}
+            </button>
+          </template>
           <button
             v-if="isEdit"
             @click="savePin"
@@ -161,6 +208,8 @@ export default {
         title: 'NewPinTitle',
         filteredTagOptions: [],
       },
+      duplicatePins: [],
+      selectedDuplicatePin: null,
     };
   },
   created() {
@@ -227,22 +276,98 @@ export default {
     },
     onUploadDone(imageId) {
       this.formUpload.imageId = imageId;
+      this.checkDuplicates();
     },
-    savePin() {
-      const self = this;
-      const data = this.pinModel.asDataByFields(
-        ['referer', 'description', 'tags', 'private'],
-      );
-      const promise = API.Pin.updateById(this.existedPin.id, data);
-      promise.then(
+    selectDuplicatePin(pin) {
+      if (this.selectedDuplicatePin && this.selectedDuplicatePin.id === pin.id) {
+        this.selectedDuplicatePin = null;
+      } else {
+        this.selectedDuplicatePin = pin;
+      }
+    },
+    checkDuplicates() {
+      const url = this.pinModel.form.url.value;
+      const imageById = this.formUpload.imageId;
+      if (!url && !imageById) {
+        return;
+      }
+      API.Pin.checkDuplicates(url, imageById).then(
         (resp) => {
-          bus.bus.$emit(bus.events.refreshPin);
-          self.$emit('pinUpdated', resp);
-          self.$parent.close();
+          if (resp.data.duplicates_found) {
+            this.duplicatePins = resp.data.duplicates;
+            if (this.duplicatePins.length > 0) {
+              this.selectedDuplicatePin = this.duplicatePins[0];
+            }
+          } else {
+            this.duplicatePins = [];
+            this.selectedDuplicatePin = null;
+          }
         },
-      );
+      ).catch(() => {
+        this.duplicatePins = [];
+        this.selectedDuplicatePin = null;
+      });
+    },
+    mergeWithSelected() {
+      if (!this.selectedDuplicatePin) {
+        return;
+      }
+      const loading = Loading.open(this);
+      const self = this;
+      const newTags = this.pinModel.form.tags.value || [];
+      const targetPinId = this.selectedDuplicatePin.id;
+      let tempPinId = null;
+      let createPromise;
+      if (isURLBlank(this.pinModel.form.url.value) && this.formUpload.imageId === null) {
+        return;
+      }
+      if (this.formUpload.imageId === null) {
+        const data = this.pinModel.asDataByFields(fields);
+        data.force_create = true;
+        createPromise = API.Pin.createFromURL(data);
+      } else {
+        const data = this.pinModel.asDataByFields(
+          ['referer', 'description', 'tags', 'private'],
+        );
+        data.image_by_id = this.formUpload.imageId;
+        data.force_create = true;
+        createPromise = API.Pin.createFromUploaded(data);
+      }
+      createPromise.then((resp) => {
+        tempPinId = resp.data.id;
+        return API.Pin.mergePins(tempPinId, targetPinId);
+      }).then((mergeResp) => {
+        const promises = [];
+        function done() {
+          self.$emit('pinMerged', mergeResp.data.target_pin);
+          self.$parent.close();
+          loading.close();
+        }
+        bus.bus.$emit(bus.events.refreshPin);
+        if (self.boardIds) {
+          self.boardIds.forEach(
+            (boardId) => {
+              promises.push(API.Board.addToBoard(boardId, [targetPinId]));
+            },
+          );
+        }
+        if (promises.length > 0) {
+          axios.all(promises).then(done);
+        } else {
+          done();
+        }
+      }).catch((error) => {
+        console.log('Cannot merge pin:', error);
+        loading.close();
+      });
+    },
+    forceCreatePin() {
+      this._createPin(true);
     },
     createPin() {
+      this._createPin(false);
+    },
+    _createPin(force = false) {
       const loading = Loading.open(this);
       const self = this;
       let promise;
@@ -251,12 +376,18 @@ export default {
       }
       if (this.formUpload.imageId === null) {
         const data = this.pinModel.asDataByFields(fields);
+        if (force) {
+          data.force_create = true;
+        }
         promise = API.Pin.createFromURL(data);
       } else {
         const data = this.pinModel.asDataByFields(
           ['referer', 'description', 'tags', 'private'],
         );
         data.image_by_id = this.formUpload.imageId;
+        if (force) {
+          data.force_create = true;
+        }
         promise = API.Pin.createFromUploaded(data);
       }
       promise.then(
@@ -269,7 +400,6 @@ export default {
           }
           bus.bus.$emit(bus.events.refreshPin);
           if (self.boardIds) {
-            // FIXME(winkidney): Should handle error for add-to board
             self.boardIds.forEach(
               (boardId) => {
                 promises.push(API.Board.addToBoard(boardId, [resp.data.id]));
@@ -283,11 +413,96 @@ export default {
           }
         },
       ).catch((error) => {
-        console.log('Cannot create pin:', error);
-        loading.close();
+        if (error.response && error.response.status === 409 && error.response.data.duplicates_found) {
+          this.duplicatePins = error.response.data.duplicates;
+          if (this.duplicatePins.length > 0) {
+            this.selectedDuplicatePin = this.duplicatePins[0];
+          }
+          loading.close();
+        } else {
+          console.log('Cannot create pin:', error);
+          loading.close();
+        }
       });
     },
     niceLinks,
   },
 };
 </script>
+
+<style scoped>
+.duplicate-warning {
+  margin-top: 1rem;
+}
+
+.duplicate-pins-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.duplicate-pin-item {
+  display: flex;
+  align-items: center;
+  padding: 0.5rem;
+  border: 2px solid #dbdbdb;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+  background-color: #fff;
+}
+
+.duplicate-pin-item:hover {
+  border-color: #3273dc;
+  background-color: #f5f7fa;
+}
+
+.duplicate-pin-item.is-selected {
+  border-color: #3273dc;
+  background-color: #eef3fc;
+}
+
+.duplicate-pin-thumb {
+  width: 60px;
+  height: 60px;
+  flex-shrink: 0;
+  margin-right: 0.75rem;
+}
+
+.duplicate-pin-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.duplicate-pin-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.duplicate-pin-id {
+  font-weight: bold;
+  margin: 0 0 0.25rem 0;
+  color: #363636;
+}
+
+.duplicate-pin-desc {
+  margin: 0 0 0.25rem 0;
+  font-size: 0.875rem;
+  color: #7a7a7a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.duplicate-pin-tags {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+</style>
