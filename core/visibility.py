@@ -2,8 +2,6 @@ from abc import ABC, abstractmethod
 
 from django.db.models import Q, QuerySet
 
-from users.models import User
-
 
 class BaseVisibilityPolicy(ABC):
     """
@@ -48,6 +46,21 @@ class BaseVisibilityPolicy(ABC):
         """从对象列表（非 QuerySet）中过滤出对用户可见的对象。"""
         return [obj for obj in objects if cls.is_object_visible(obj, user)]
 
+    @classmethod
+    @abstractmethod
+    def infer_privacy(cls, obj) -> bool:
+        """
+        根据关联关系推断对象的隐私状态应该是什么。
+
+        用于回填审计：将推断结果与实际 private 字段对比，
+        发现因旧规则遗留导致的可见性不一致。
+        """
+        ...
+
+    @classmethod
+    def get_owner(cls, obj):
+        return getattr(obj, cls.owner_field_name, None)
+
 
 class PinVisibilityPolicy(BaseVisibilityPolicy):
     """
@@ -55,6 +68,10 @@ class PinVisibilityPolicy(BaseVisibilityPolicy):
 
     - 公开 Pin：对所有用户可见
     - 私有 Pin：仅对 submitter（所有者）可见
+
+    推断规则：
+    - 若 Pin 所属的任意 Board 为 private=True，则推断该 Pin 应为 private
+    - 否则保持 Pin 自身的 private 值
     """
 
     owner_field_name = "submitter"
@@ -68,6 +85,18 @@ class PinVisibilityPolicy(BaseVisibilityPolicy):
             queryset = queryset.exclude(private=True)
         return queryset.select_related("image", "submitter")
 
+    @classmethod
+    def infer_privacy(cls, obj) -> bool:
+        if cls.is_private(obj):
+            return True
+        from core.models import Board
+        in_private_board = Board.objects.filter(
+            pins=obj, private=True
+        ).exists()
+        if in_private_board:
+            return True
+        return False
+
 
 class BoardVisibilityPolicy(BaseVisibilityPolicy):
     """
@@ -75,6 +104,12 @@ class BoardVisibilityPolicy(BaseVisibilityPolicy):
 
     - 公开 Board：对所有用户可见
     - 私有 Board：仅对 submitter（所有者）可见
+
+    推断规则：
+    - 若 Board 已为 private，保持 True
+    - 若 Board 中所有 Pin 都属于其他用户且均为 private，
+      则推断该 Board 实际上应为 private（对非所有者无可见内容）
+    - 否则保持 Board 自身的 private 值
     """
 
     owner_field_name = "submitter"
@@ -87,3 +122,23 @@ class BoardVisibilityPolicy(BaseVisibilityPolicy):
         else:
             queryset = queryset.exclude(private=True)
         return queryset
+
+    @classmethod
+    def infer_privacy(cls, obj) -> bool:
+        if cls.is_private(obj):
+            return True
+        owner = cls.get_owner(obj)
+        pins = obj.pins.all()
+        if not pins.exists():
+            return False
+        all_pins_invisible_to_others = True
+        for pin in pins:
+            if not PinVisibilityPolicy.is_private(pin):
+                all_pins_invisible_to_others = False
+                break
+            if PinVisibilityPolicy.get_owner(pin) == owner:
+                all_pins_invisible_to_others = False
+                break
+        if all_pins_invisible_to_others:
+            return True
+        return False
