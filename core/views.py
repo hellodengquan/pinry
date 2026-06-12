@@ -8,8 +8,11 @@ from taggit.models import Tag
 
 from core import serializers as api
 from core.models import Image, Pin, Board
-from core.permissions import IsOwnerOrReadOnly, OwnerOnlyIfPrivate
-from core.serializers import filter_private_pin, filter_private_board
+from core.permissions import (
+    IsOwnerOrReadOnly,
+    VisibilityBasedPermission,
+)
+from core.visibility import PinVisibilityPolicy, BoardVisibilityPolicy
 
 
 class ImageViewSet(mixins.CreateModelMixin, GenericViewSet):
@@ -21,30 +24,54 @@ class ImageViewSet(mixins.CreateModelMixin, GenericViewSet):
 
 
 class PinViewSet(viewsets.ModelViewSet):
+    """
+    Pin 视图集。
+
+    职责拆分：
+    - queryset 过滤（字段截取/可见性）：PinVisibilityPolicy
+    - 对象级权限：IsOwnerOrReadOnly（编辑权限） + VisibilityBasedPermission（查看权限）
+    - 序列化/反序列化：PinSerializer
+    """
     serializer_class = api.PinSerializer
     filter_backends = (DjangoFilterBackend, SearchFilter, OrderingFilter)
     filter_fields = ("submitter__username", 'tags__name', "pins__id")
     ordering_fields = ('-id', )
     ordering = ('-id', )
-    permission_classes = [IsOwnerOrReadOnly("submitter"), OwnerOnlyIfPrivate("submitter")]
+    permission_classes = [
+        IsOwnerOrReadOnly("submitter"),
+        VisibilityBasedPermission(PinVisibilityPolicy),
+    ]
 
     def get_queryset(self):
-        query = Pin.objects.all()
-        request = self.request
-        return filter_private_pin(request, query)
+        return PinVisibilityPolicy.filter_queryset(
+            Pin.objects.all(), self.request.user
+        )
 
 
 class BoardViewSet(viewsets.ModelViewSet):
+    """
+    Board 视图集。
+
+    职责拆分：
+    - queryset 过滤（字段截取/可见性）：BoardVisibilityPolicy
+    - 对象级权限：IsOwnerOrReadOnly（编辑权限） + VisibilityBasedPermission（查看权限）
+    - 序列化/反序列化：BoardSerializer
+    """
     serializer_class = api.BoardSerializer
     filter_backends = (DjangoFilterBackend, OrderingFilter, SearchFilter)
     search_fields = ("name", )
     filter_fields = ("submitter__username", )
     ordering_fields = ('-id', )
     ordering = ('-id', )
-    permission_classes = [IsOwnerOrReadOnly("submitter"), OwnerOnlyIfPrivate("submitter")]
+    permission_classes = [
+        IsOwnerOrReadOnly("submitter"),
+        VisibilityBasedPermission(BoardVisibilityPolicy),
+    ]
 
     def get_queryset(self):
-        return filter_private_board(self.request, Board.objects.all())
+        return BoardVisibilityPolicy.filter_queryset(
+            Board.objects.all(), self.request.user
+        )
 
 
 class BoardAutoCompleteViewSet(
@@ -57,10 +84,14 @@ class BoardAutoCompleteViewSet(
     ordering_fields = ('-id', )
     ordering = ('-id', )
     pagination_class = None
-    permission_classes = [OwnerOnlyIfPrivate("submitter"), ]
+    permission_classes = [
+        VisibilityBasedPermission(BoardVisibilityPolicy),
+    ]
 
     def get_queryset(self):
-        return filter_private_board(self.request, Board.objects.all())
+        return BoardVisibilityPolicy.filter_queryset(
+            Board.objects.all(), self.request.user
+        )
 
 
 class TagAutoCompleteViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
