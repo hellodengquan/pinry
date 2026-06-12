@@ -73,8 +73,9 @@ def scale_and_crop_single(image, size, crop=False, upscale=False, quality=None):
         target_y = source_y * scale
 
     if scale < 1.0 or (scale > 1.0 and upscale):
+        resample_method = Image.LANCZOS if hasattr(Image, 'LANCZOS') else Image.ANTIALIAS
         im = im.resize((int(source_x * scale), int(source_y * scale)),
-                       resample=Image.ANTIALIAS)
+                       resample=resample_method)
 
     if crop:
         # Use integer values now.

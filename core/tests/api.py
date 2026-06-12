@@ -249,7 +249,7 @@ class PinTests(APITestCase):
             'That\'s something else (probably a CC logo)!',
             resp_data
         )
-        self.assertEquals(Pin.objects.count(), 2)
+        self.assertEqual(Pin.objects.count(), 2)
 
     def test_patch_detail_unauthenticated(self):
         image = create_image()
@@ -286,3 +286,107 @@ class PinTests(APITestCase):
         uri = reverse("pin-detail", kwargs={"pk": pin.pk})
         self.client.delete(uri)
         self.assertEqual(Pin.objects.count(), 0)
+
+
+class PinSearchByTagTests(APITestCase):
+
+    def setUp(self):
+        super(PinSearchByTagTests, self).setUp()
+        self.user = create_user("default")
+        self.other_user = create_user("other")
+        self.client.login(username=self.user.username, password='password')
+
+    def tearDown(self):
+        _teardown_models()
+
+    def _create_pins_with_tag(self, user, tag_name, count, private=False, extra_tags=None):
+        pins = []
+        for i in range(count):
+            image = create_image()
+            pin = Pin.objects.create(
+                submitter=user,
+                image=image,
+                private=private,
+            )
+            pin.tags.add(tag_name)
+            if extra_tags:
+                for tag in extra_tags:
+                    pin.tags.add(tag)
+            pins.append(pin)
+        return pins
+
+    def test_should_not_return_duplicate_pins_when_filtering_by_tag(self):
+        tag_name = "test_tag"
+        self._create_pins_with_tag(self.user, tag_name, 5, extra_tags=["tag_a", "tag_b", "tag_c"])
+
+        url = reverse("pin-list") + f"?tags__name={tag_name}"
+        response = self.client.get(url)
+        results = response.json()['results']
+
+        pin_ids = [pin['id'] for pin in results]
+        unique_pin_ids = list(set(pin_ids))
+        self.assertEqual(len(pin_ids), len(unique_pin_ids),
+                         f"Found duplicate pins: {pin_ids}")
+        self.assertEqual(len(unique_pin_ids), 5,
+                         f"Expected 5 unique pins, got {len(unique_pin_ids)}")
+
+    def test_should_have_consistent_pagination_when_filtering_by_tag(self):
+        tag_name = "pagination_test_tag"
+        self._create_pins_with_tag(self.user, tag_name, 35, extra_tags=["extra1", "extra2"])
+
+        url = reverse("pin-list") + f"?tags__name={tag_name}&limit=20"
+        response = self.client.get(url)
+        data = response.json()
+
+        self.assertEqual(len(data['results']), 20)
+        self.assertIsNotNone(data['next'])
+
+        second_url = data['next'].replace('http://testserver', '')
+        response2 = self.client.get(second_url)
+        data2 = response2.json()
+
+        self.assertEqual(len(data2['results']), 15)
+        self.assertIsNone(data2['next'])
+
+        all_ids = [p['id'] for p in data['results']] + [p['id'] for p in data2['results']]
+        unique_ids = list(set(all_ids))
+        self.assertEqual(len(all_ids), len(unique_ids),
+                         "Duplicate pins found across pages")
+        self.assertEqual(len(unique_ids), 35)
+
+    def test_should_apply_visibility_filter_consistently_across_pages(self):
+        tag_name = "visibility_test_tag"
+        extra_tags = ["visible_tag1", "visible_tag2"]
+        self._create_pins_with_tag(self.user, tag_name, 15, private=True, extra_tags=extra_tags)
+        self._create_pins_with_tag(self.other_user, tag_name, 10, private=False, extra_tags=extra_tags)
+        self._create_pins_with_tag(self.other_user, tag_name, 5, private=True, extra_tags=extra_tags)
+
+        self.client.logout()
+        url = reverse("pin-list") + f"?tags__name={tag_name}&limit=20"
+        response = self.client.get(url)
+        data = response.json()
+
+        self.assertEqual(len(data['results']), 10)
+        self.assertIsNone(data['next'])
+
+        for pin in data['results']:
+            self.assertFalse(pin['private'],
+                           f"Private pin found in anonymous user results: {pin['id']}")
+            self.assertEqual(pin['submitter']['username'], 'user_other',
+                           "Expected only public pins from other user")
+
+    def test_should_owner_see_own_private_pins_in_tag_search(self):
+        tag_name = "owner_private_tag"
+        extra_tags = ["own_tag1", "own_tag2"]
+        self._create_pins_with_tag(self.user, tag_name, 5, private=True, extra_tags=extra_tags)
+        self._create_pins_with_tag(self.user, tag_name, 5, private=False, extra_tags=extra_tags)
+
+        url = reverse("pin-list") + f"?tags__name={tag_name}"
+        response = self.client.get(url)
+        data = response.json()
+
+        self.assertEqual(len(data['results']), 10)
+        private_count = sum(1 for p in data['results'] if p['private'])
+        public_count = sum(1 for p in data['results'] if not p['private'])
+        self.assertEqual(private_count, 5)
+        self.assertEqual(public_count, 5)

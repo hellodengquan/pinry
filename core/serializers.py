@@ -16,7 +16,7 @@ def filter_private_pin(request, query):
         query = query.exclude(~Q(submitter=request.user), private=True)
     else:
         query = query.exclude(private=True)
-    return query.select_related('image', 'submitter')
+    return query.select_related('image', 'submitter').distinct()
 
 
 def filter_private_board(request, query):
@@ -24,7 +24,7 @@ def filter_private_board(request, query):
         query = query.exclude(~Q(submitter=request.user), private=True)
     else:
         query = query.exclude(private=True)
-    return query
+    return query.distinct()
 
 
 class ThumbnailSerializer(serializers.HyperlinkedModelSerializer):
