@@ -2,16 +2,18 @@ import json
 import tempfile
 
 from django.core.management import call_command
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.core.files.images import ImageFile
 
 from core.models import Pin, Board, Image
 from core.visibility import PinVisibilityPolicy, BoardVisibilityPolicy
 from core.management.commands.backfill_visibility_audit import (
     classify_severity,
+    get_severity_rules,
     SEVERITY_CRITICAL,
     SEVERITY_WARNING,
     SEVERITY_INFO,
+    DEFAULT_SEVERITY_RULES,
 )
 from core.tests.helpers import create_user, TEST_IMAGE_PATH
 from django_images.models import Thumbnail
@@ -118,6 +120,12 @@ class BackfillVisibilityAuditCommandTest(TestCase):
 
     def test_public_board_with_all_other_users_private_pins_is_critical(self):
         other_user_pin = _create_pin(self.owner_b, private=True)
+        b_private_board = Board.objects.create(
+            name="b_secret", submitter=self.owner_b, private=True
+        )
+        b_private_board.pins.add(other_user_pin)
+        b_private_board.save()
+
         public_board = Board.objects.create(
             name="empty_view_board", submitter=self.owner_a, private=False
         )
@@ -241,24 +249,30 @@ class BackfillVisibilityAuditCommandTest(TestCase):
         self.assertTrue(entry["fix_applied"])
 
     def test_fix_for_board_updates_database(self):
-        pin1 = _create_pin(self.owner_b, private=True)
-        pin2 = _create_pin(self.owner_b, private=True)
-        public_board = Board.objects.create(
+        other_private_pin = _create_pin(self.owner_b, private=True)
+        b_private_board = Board.objects.create(
+            name="b_secret", submitter=self.owner_b, private=True
+        )
+        b_private_board.pins.add(other_private_pin)
+        b_private_board.save()
+
+        a_public_board = Board.objects.create(
             name="empty_view", submitter=self.owner_a, private=False
         )
-        public_board.pins.add(pin1, pin2)
-        public_board.save()
+        a_public_board.pins.add(other_private_pin)
+        a_public_board.save()
 
-        self.assertFalse(Board.objects.get(pk=public_board.pk).private)
+        self.assertFalse(Board.objects.get(pk=a_public_board.pk).private)
 
         report = self._run_audit(fix=True, dry_run=False)
 
-        board_after = Board.objects.get(pk=public_board.pk)
+        board_after = Board.objects.get(pk=a_public_board.pk)
         self.assertTrue(board_after.private)
 
-        board_entries = [b for b in report["boards"] if b["id"] == public_board.id]
+        board_entries = [b for b in report["boards"] if b["id"] == a_public_board.id]
         self.assertEqual(len(board_entries), 1)
         self.assertTrue(board_entries[0]["fix_applied"])
+        self.assertEqual(board_entries[0]["severity"], SEVERITY_CRITICAL)
 
     def test_report_summary_by_severity_breakdown(self):
         pin_critical = _create_pin(self.owner_a, private=False)
@@ -475,6 +489,178 @@ class PinVisibilityPolicyInferTest(TestCase):
         self.assertTrue(PinVisibilityPolicy.infer_privacy(pin))
 
 
+class SeverityRulesSettingsTest(TestCase):
+    """
+    测试 VISIBILITY_AUDIT_SEVERITY_RULES settings 配置的三种场景：
+    1. settings 缺失 → 使用默认值
+    2. 全部自定义 → 使用配置值
+    3. 部分覆盖 → 未指定的键使用默认值
+    """
+
+    def setUp(self):
+        self.owner = create_user("sev_user")
+        self.other = create_user("sev_other")
+
+    def _setup_discrepant_data(self):
+        """创建包含两种差异类型的测试数据。"""
+        pin_critical = _create_pin(self.owner, private=False)
+        private_board = Board.objects.create(
+            name="secret", submitter=self.owner, private=True
+        )
+        private_board.pins.add(pin_critical)
+
+        pin_warning = _create_pin(self.owner, private=True)
+        public_board = Board.objects.create(
+            name="shared", submitter=self.owner, private=False
+        )
+        public_board.pins.add(pin_warning)
+
+        return pin_critical, pin_warning
+
+    def _run_audit_and_get_report(self):
+        out = tempfile.mktemp(suffix=".json")
+        call_command(
+            "backfill_visibility_audit",
+            "--output", out,
+            verbosity=0,
+        )
+        with open(out) as f:
+            return json.load(f)
+
+    def test_settings_missing_uses_defaults(self):
+        """场景 1：settings 中未配置 VISIBILITY_AUDIT_SEVERITY_RULES，使用默认值。"""
+        if hasattr(settings, "VISIBILITY_AUDIT_SEVERITY_RULES"):
+            delattr(settings, "VISIBILITY_AUDIT_SEVERITY_RULES")
+
+        rules = get_severity_rules()
+
+        self.assertEqual(rules["public_to_private"], DEFAULT_SEVERITY_RULES["public_to_private"])
+        self.assertEqual(rules["private_to_public"], DEFAULT_SEVERITY_RULES["private_to_public"])
+        self.assertEqual(rules["field_alignment"], DEFAULT_SEVERITY_RULES["field_alignment"])
+
+        pin_critical, pin_warning = self._setup_discrepant_data()
+        report = self._run_audit_and_get_report()
+
+        pin_entries = {e["id"]: e for e in report["pins"]}
+        self.assertEqual(pin_entries[pin_critical.id]["severity"], SEVERITY_CRITICAL)
+        self.assertEqual(pin_entries[pin_warning.id]["severity"], SEVERITY_WARNING)
+
+    @override_settings(
+        VISIBILITY_AUDIT_SEVERITY_RULES={
+            "public_to_private": SEVERITY_WARNING,
+            "private_to_public": SEVERITY_CRITICAL,
+            "field_alignment": SEVERITY_INFO,
+        }
+    )
+    def test_settings_fully_customized(self):
+        """场景 2：settings 全部自定义，所有规则使用配置值。"""
+        rules = get_severity_rules()
+
+        self.assertEqual(rules["public_to_private"], SEVERITY_WARNING)
+        self.assertEqual(rules["private_to_public"], SEVERITY_CRITICAL)
+        self.assertEqual(rules["field_alignment"], SEVERITY_INFO)
+
+        pin_critical, pin_warning = self._setup_discrepant_data()
+        report = self._run_audit_and_get_report()
+
+        pin_entries = {e["id"]: e for e in report["pins"]}
+        self.assertEqual(pin_entries[pin_critical.id]["severity"], SEVERITY_WARNING)
+        self.assertEqual(pin_entries[pin_warning.id]["severity"], SEVERITY_CRITICAL)
+
+    @override_settings(
+        VISIBILITY_AUDIT_SEVERITY_RULES={
+            "public_to_private": SEVERITY_WARNING,
+        }
+    )
+    def test_settings_partial_override(self):
+        """场景 3：settings 仅部分覆盖，未指定的键使用默认值。"""
+        rules = get_severity_rules()
+
+        self.assertEqual(rules["public_to_private"], SEVERITY_WARNING)
+        self.assertEqual(rules["private_to_public"], DEFAULT_SEVERITY_RULES["private_to_public"])
+        self.assertEqual(rules["field_alignment"], DEFAULT_SEVERITY_RULES["field_alignment"])
+
+        pin_critical, pin_warning = self._setup_discrepant_data()
+        report = self._run_audit_and_get_report()
+
+        pin_entries = {e["id"]: e for e in report["pins"]}
+        self.assertEqual(pin_entries[pin_critical.id]["severity"], SEVERITY_WARNING)
+        self.assertEqual(pin_entries[pin_warning.id]["severity"], SEVERITY_WARNING)
+
+    @override_settings(
+        VISIBILITY_AUDIT_SEVERITY_RULES="not_a_dict"
+    )
+    def test_settings_invalid_type_falls_back_to_defaults(self):
+        """settings 配置类型错误（非 dict），安全回退到默认值。"""
+        rules = get_severity_rules()
+
+        self.assertEqual(rules["public_to_private"], DEFAULT_SEVERITY_RULES["public_to_private"])
+        self.assertEqual(rules["private_to_public"], DEFAULT_SEVERITY_RULES["private_to_public"])
+
+    @override_settings(
+        VISIBILITY_AUDIT_SEVERITY_RULES={
+            "public_to_private": "INVALID_LEVEL",
+            "unknown_key": SEVERITY_WARNING,
+        }
+    )
+    def test_settings_invalid_values_and_unknown_keys_ignored(self):
+        """无效的严重级别值和未知键会被忽略，使用默认值。"""
+        rules = get_severity_rules()
+
+        self.assertEqual(rules["public_to_private"], DEFAULT_SEVERITY_RULES["public_to_private"])
+        self.assertNotIn("unknown_key", rules)
+
+    def test_classify_severity_with_custom_rules(self):
+        """classify_severity 函数支持传入自定义规则字典。"""
+        custom_rules = {
+            "public_to_private": SEVERITY_WARNING,
+            "private_to_public": SEVERITY_CRITICAL,
+            "field_alignment": SEVERITY_INFO,
+        }
+
+        self.assertEqual(
+            classify_severity(False, True, custom_rules),
+            SEVERITY_WARNING,
+        )
+        self.assertEqual(
+            classify_severity(True, False, custom_rules),
+            SEVERITY_CRITICAL,
+        )
+        self.assertEqual(
+            classify_severity(True, True, custom_rules),
+            SEVERITY_INFO,
+        )
+
+    @override_settings(
+        VISIBILITY_AUDIT_SEVERITY_RULES={
+            "private_to_public": SEVERITY_CRITICAL,
+            "public_to_private": SEVERITY_WARNING,
+        }
+    )
+    def test_min_severity_filter_respects_custom_rules(self):
+        """--min-severity 过滤在自定义规则下仍然正确工作。
+
+        默认规则下 public_to_private 是 critical，private_to_public 是 warning，
+        自定义后互换：private_to_public 改为 critical，public_to_private 改为 warning。
+        使用 --min-severity=critical 应该只包含 private_to_public 的 Pin。
+        """
+        pin_public_to_private, pin_private_to_public = self._setup_discrepant_data()
+
+        out = tempfile.mktemp(suffix=".json")
+        call_command(
+            "backfill_visibility_audit",
+            "--output", out,
+            "--min-severity", SEVERITY_CRITICAL,
+            verbosity=0,
+        )
+        with open(out) as f:
+            report = json.load(f)
+
+        pin_ids = [e["id"] for e in report["pins"]]
+        self.assertIn(pin_private_to_public.id, pin_ids)
+        self.assertNotIn(pin_public_to_private.id, pin_ids)
+
+
 class BoardVisibilityPolicyInferTest(TestCase):
 
     def setUp(self):
@@ -501,6 +687,10 @@ class BoardVisibilityPolicyInferTest(TestCase):
 
     def test_infer_privacy_public_board_with_other_users_private_pins_only(self):
         pin = _create_pin(self.other, private=True)
+        other_private_board = Board.objects.create(
+            name="other_priv", submitter=self.other, private=True
+        )
+        other_private_board.pins.add(pin)
         board = Board.objects.create(name="pub", submitter=self.owner, private=False)
         board.pins.add(pin)
         self.assertTrue(BoardVisibilityPolicy.infer_privacy(board))

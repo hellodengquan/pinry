@@ -141,7 +141,7 @@ class BoardVisibilityPolicy(BaseVisibilityPolicy):
             return cls.is_private(obj)
 
         has_public_pin = any(
-            not PinVisibilityPolicy.infer_privacy(pin) for pin in pins
+            not PinVisibilityPolicy.is_private(pin) for pin in pins
         )
         if cls.is_private(obj) and has_public_pin:
             return False

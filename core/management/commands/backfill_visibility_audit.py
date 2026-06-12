@@ -1,5 +1,6 @@
 import json
 
+from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.core.serializers import serialize
 
@@ -17,22 +18,52 @@ SEVERITY_ORDER = {
     SEVERITY_CRITICAL: 2,
 }
 
+DEFAULT_SEVERITY_RULES = {
+    "public_to_private": SEVERITY_CRITICAL,
+    "private_to_public": SEVERITY_WARNING,
+    "cross_board_pin": SEVERITY_CRITICAL,
+    "field_alignment": SEVERITY_INFO,
+}
 
-def classify_severity(current_private: bool, inferred_private: bool) -> str:
-    """
-    根据差异方向分类严重度。
 
-    - public -> private (current=False, inferred=True): critical
-      现有用户会失去访问权限，影响面大，需立即处理
-    - private -> public (current=True, inferred=False): warning
-      可能导致信息意外泄露，需评估确认
-    - 其他辅助字段对齐: info（保留，当前场景下未使用）
+def get_severity_rules():
     """
+    从 Django settings 读取可见性审计的严重度分级规则。
+
+    settings 中配置项名称：VISIBILITY_AUDIT_SEVERITY_RULES
+    支持部分覆盖，未指定的键使用默认值。
+    """
+    user_rules = getattr(settings, "VISIBILITY_AUDIT_SEVERITY_RULES", {})
+    if not isinstance(user_rules, dict):
+        user_rules = {}
+
+    rules = dict(DEFAULT_SEVERITY_RULES)
+    for key, value in user_rules.items():
+        if key in rules and value in SEVERITY_ORDER:
+            rules[key] = value
+    return rules
+
+
+def classify_severity(current_private: bool, inferred_private: bool, rules=None) -> str:
+    """
+    根据差异方向和配置的规则分类严重度。
+
+    Args:
+        current_private: 数据中存储的 private 值
+        inferred_private: 策略推断出的 private 值
+        rules: 严重度规则字典，若为 None 则从 settings 读取
+
+    Returns:
+        严重级别：critical / warning / info
+    """
+    if rules is None:
+        rules = get_severity_rules()
+
     if not current_private and inferred_private:
-        return SEVERITY_CRITICAL
+        return rules.get("public_to_private", DEFAULT_SEVERITY_RULES["public_to_private"])
     if current_private and not inferred_private:
-        return SEVERITY_WARNING
-    return SEVERITY_INFO
+        return rules.get("private_to_public", DEFAULT_SEVERITY_RULES["private_to_public"])
+    return rules.get("field_alignment", DEFAULT_SEVERITY_RULES["field_alignment"])
 
 
 class Command(BaseCommand):
@@ -88,6 +119,8 @@ class Command(BaseCommand):
         fixture_path = options["load_fixture"]
         min_severity = options["min_severity"]
 
+        severity_rules = get_severity_rules()
+
         if fixture_path:
             self._load_fixture(fixture_path)
 
@@ -111,8 +144,8 @@ class Command(BaseCommand):
             "fixture_data": [],
         }
 
-        all_pin_entries = self._audit_pins(report, fix, dry_run)
-        all_board_entries = self._audit_boards(report, fix, dry_run)
+        all_pin_entries = self._audit_pins(report, fix, dry_run, severity_rules)
+        all_board_entries = self._audit_boards(report, fix, dry_run, severity_rules)
 
         report["pins"] = self._filter_by_severity(all_pin_entries, min_severity)
         report["boards"] = self._filter_by_severity(all_board_entries, min_severity)
@@ -172,14 +205,14 @@ class Command(BaseCommand):
         )
         return fixture_data
 
-    def _audit_pins(self, report, fix, dry_run):
+    def _audit_pins(self, report, fix, dry_run, severity_rules):
         entries = []
         for pin in Pin.objects.select_related("submitter", "image").iterator():
             current_private = pin.private
             inferred_private = PinVisibilityPolicy.infer_privacy(pin)
 
             if current_private != inferred_private:
-                severity = classify_severity(current_private, inferred_private)
+                severity = classify_severity(current_private, inferred_private, severity_rules)
                 entry = {
                     "model": "Pin",
                     "id": pin.id,
@@ -205,14 +238,14 @@ class Command(BaseCommand):
                     entry["fix_would_be"] = inferred_private
         return entries
 
-    def _audit_boards(self, report, fix, dry_run):
+    def _audit_boards(self, report, fix, dry_run, severity_rules):
         entries = []
         for board in Board.objects.select_related("submitter").iterator():
             current_private = board.private
             inferred_private = BoardVisibilityPolicy.infer_privacy(board)
 
             if current_private != inferred_private:
-                severity = classify_severity(current_private, inferred_private)
+                severity = classify_severity(current_private, inferred_private, severity_rules)
                 entry = {
                     "model": "Board",
                     "id": board.id,
@@ -271,7 +304,7 @@ class Command(BaseCommand):
         if not current_private and inferred_private:
             if pins.exists():
                 all_other_private = all(
-                    PinVisibilityPolicy.is_private(p)
+                    PinVisibilityPolicy.infer_privacy(p)
                     and PinVisibilityPolicy.get_owner(p) != owner
                     for p in pins
                 )
