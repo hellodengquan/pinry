@@ -3,6 +3,7 @@ import tempfile
 
 from django.core.management import call_command
 from django.test import TestCase, override_settings
+from django.core.exceptions import ImproperlyConfigured
 from django.core.files.images import ImageFile
 
 from core.models import Pin, Board, Image
@@ -10,10 +11,13 @@ from core.visibility import PinVisibilityPolicy, BoardVisibilityPolicy
 from core.management.commands.backfill_visibility_audit import (
     classify_severity,
     get_severity_rules,
+    validate_severity_rules,
     SEVERITY_CRITICAL,
     SEVERITY_WARNING,
     SEVERITY_INFO,
     DEFAULT_SEVERITY_RULES,
+    ALLOWED_RULE_KEYS,
+    ALLOWED_SEVERITIES,
 )
 from core.tests.helpers import create_user, TEST_IMAGE_PATH
 from django_images.models import Thumbnail
@@ -491,10 +495,11 @@ class PinVisibilityPolicyInferTest(TestCase):
 
 class SeverityRulesSettingsTest(TestCase):
     """
-    测试 VISIBILITY_AUDIT_SEVERITY_RULES settings 配置的三种场景：
-    1. settings 缺失 → 使用默认值
-    2. 全部自定义 → 使用配置值
-    3. 部分覆盖 → 未指定的键使用默认值
+    测试 VISIBILITY_AUDIT_SEVERITY_RULES settings 配置场景：
+    - settings 缺失 → 使用默认值
+    - 全部自定义 → 使用配置值
+    - 部分覆盖 → 未指定的键使用默认值
+    - 非法配置 → 抛出 ImproperlyConfigured
     """
 
     def setUp(self):
@@ -502,7 +507,6 @@ class SeverityRulesSettingsTest(TestCase):
         self.other = create_user("sev_other")
 
     def _setup_discrepant_data(self):
-        """创建包含两种差异类型的测试数据。"""
         pin_critical = _create_pin(self.owner, private=False)
         private_board = Board.objects.create(
             name="secret", submitter=self.owner, private=True
@@ -528,7 +532,6 @@ class SeverityRulesSettingsTest(TestCase):
             return json.load(f)
 
     def test_settings_missing_uses_defaults(self):
-        """场景 1：settings 中未配置 VISIBILITY_AUDIT_SEVERITY_RULES，使用默认值。"""
         if hasattr(settings, "VISIBILITY_AUDIT_SEVERITY_RULES"):
             delattr(settings, "VISIBILITY_AUDIT_SEVERITY_RULES")
 
@@ -553,7 +556,6 @@ class SeverityRulesSettingsTest(TestCase):
         }
     )
     def test_settings_fully_customized(self):
-        """场景 2：settings 全部自定义，所有规则使用配置值。"""
         rules = get_severity_rules()
 
         self.assertEqual(rules["public_to_private"], SEVERITY_WARNING)
@@ -573,7 +575,6 @@ class SeverityRulesSettingsTest(TestCase):
         }
     )
     def test_settings_partial_override(self):
-        """场景 3：settings 仅部分覆盖，未指定的键使用默认值。"""
         rules = get_severity_rules()
 
         self.assertEqual(rules["public_to_private"], SEVERITY_WARNING)
@@ -587,31 +588,7 @@ class SeverityRulesSettingsTest(TestCase):
         self.assertEqual(pin_entries[pin_critical.id]["severity"], SEVERITY_WARNING)
         self.assertEqual(pin_entries[pin_warning.id]["severity"], SEVERITY_WARNING)
 
-    @override_settings(
-        VISIBILITY_AUDIT_SEVERITY_RULES="not_a_dict"
-    )
-    def test_settings_invalid_type_falls_back_to_defaults(self):
-        """settings 配置类型错误（非 dict），安全回退到默认值。"""
-        rules = get_severity_rules()
-
-        self.assertEqual(rules["public_to_private"], DEFAULT_SEVERITY_RULES["public_to_private"])
-        self.assertEqual(rules["private_to_public"], DEFAULT_SEVERITY_RULES["private_to_public"])
-
-    @override_settings(
-        VISIBILITY_AUDIT_SEVERITY_RULES={
-            "public_to_private": "INVALID_LEVEL",
-            "unknown_key": SEVERITY_WARNING,
-        }
-    )
-    def test_settings_invalid_values_and_unknown_keys_ignored(self):
-        """无效的严重级别值和未知键会被忽略，使用默认值。"""
-        rules = get_severity_rules()
-
-        self.assertEqual(rules["public_to_private"], DEFAULT_SEVERITY_RULES["public_to_private"])
-        self.assertNotIn("unknown_key", rules)
-
     def test_classify_severity_with_custom_rules(self):
-        """classify_severity 函数支持传入自定义规则字典。"""
         custom_rules = {
             "public_to_private": SEVERITY_WARNING,
             "private_to_public": SEVERITY_CRITICAL,
@@ -638,12 +615,6 @@ class SeverityRulesSettingsTest(TestCase):
         }
     )
     def test_min_severity_filter_respects_custom_rules(self):
-        """--min-severity 过滤在自定义规则下仍然正确工作。
-
-        默认规则下 public_to_private 是 critical，private_to_public 是 warning，
-        自定义后互换：private_to_public 改为 critical，public_to_private 改为 warning。
-        使用 --min-severity=critical 应该只包含 private_to_public 的 Pin。
-        """
         pin_public_to_private, pin_private_to_public = self._setup_discrepant_data()
 
         out = tempfile.mktemp(suffix=".json")
@@ -659,6 +630,81 @@ class SeverityRulesSettingsTest(TestCase):
         pin_ids = [e["id"] for e in report["pins"]]
         self.assertIn(pin_private_to_public.id, pin_ids)
         self.assertNotIn(pin_public_to_private.id, pin_ids)
+
+    @override_settings(
+        VISIBILITY_AUDIT_SEVERITY_RULES={
+            "public_to_private": "critcal",
+        }
+    )
+    def test_invalid_severity_value_raises_improperly_configured(self):
+        """错误的严重度值（如拼写错误 'critcal'）应抛出 ImproperlyConfigured。"""
+        with self.assertRaises(ImproperlyConfigured) as ctx:
+            get_severity_rules()
+        msg = str(ctx.exception)
+        self.assertIn("public_to_private", msg)
+        self.assertIn("critcal", msg)
+
+    @override_settings(
+        VISIBILITY_AUDIT_SEVERITY_RULES={
+            "unknown_field": SEVERITY_WARNING,
+        }
+    )
+    def test_unknown_rule_key_raises_improperly_configured(self):
+        """未知的字段名应抛出 ImproperlyConfigured。"""
+        with self.assertRaises(ImproperlyConfigured) as ctx:
+            get_severity_rules()
+        msg = str(ctx.exception)
+        self.assertIn("unknown_field", msg)
+
+    @override_settings(
+        VISIBILITY_AUDIT_SEVERITY_RULES={
+            "public_to_private": 123,
+        }
+    )
+    def test_non_string_severity_value_raises_improperly_configured(self):
+        """阈值类型错误（非字符串）应抛出 ImproperlyConfigured。"""
+        with self.assertRaises(ImproperlyConfigured) as ctx:
+            get_severity_rules()
+        msg = str(ctx.exception)
+        self.assertIn("public_to_private", msg)
+        self.assertIn("int", msg)
+
+    @override_settings(
+        VISIBILITY_AUDIT_SEVERITY_RULES="not_a_dict"
+    )
+    def test_non_dict_settings_raises_improperly_configured(self):
+        """settings 配置整体类型错误（非 dict）应抛出 ImproperlyConfigured。"""
+        with self.assertRaises(ImproperlyConfigured) as ctx:
+            get_severity_rules()
+        msg = str(ctx.exception)
+        self.assertIn("dict", msg)
+        self.assertIn("str", msg)
+
+    @override_settings(
+        VISIBILITY_AUDIT_SEVERITY_RULES={
+            "public_to_private": "critcal",
+            "unknown_field": 42,
+        }
+    )
+    def test_multiple_errors_all_reported(self):
+        """多条非法规则应一次性全部报告。"""
+        with self.assertRaises(ImproperlyConfigured) as ctx:
+            get_severity_rules()
+        msg = str(ctx.exception)
+        self.assertIn("public_to_private", msg)
+        self.assertIn("critcal", msg)
+        self.assertIn("unknown_field", msg)
+
+    def test_validate_severity_rules_directly_with_valid_rules(self):
+        """合法配置通过 validate_severity_rules 不抛异常。"""
+        validate_severity_rules({
+            "public_to_private": SEVERITY_CRITICAL,
+            "private_to_public": SEVERITY_WARNING,
+        })
+
+    def test_validate_severity_rules_directly_empty_dict(self):
+        """空字典是合法配置（等于不覆盖任何默认值）。"""
+        validate_severity_rules({})
 
 
 class BoardVisibilityPolicyInferTest(TestCase):

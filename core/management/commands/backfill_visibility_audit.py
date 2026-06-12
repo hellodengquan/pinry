@@ -1,6 +1,7 @@
 import json
 
 from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 from django.core.management.base import BaseCommand
 from django.core.serializers import serialize
 
@@ -25,6 +26,48 @@ DEFAULT_SEVERITY_RULES = {
     "field_alignment": SEVERITY_INFO,
 }
 
+ALLOWED_RULE_KEYS = set(DEFAULT_SEVERITY_RULES.keys())
+ALLOWED_SEVERITIES = set(SEVERITY_ORDER.keys())
+
+
+def validate_severity_rules(user_rules):
+    errors = []
+
+    if not isinstance(user_rules, dict):
+        errors.append(
+            f"VISIBILITY_AUDIT_SEVERITY_RULES must be a dict, "
+            f"got {type(user_rules).__name__}."
+        )
+        raise ImproperlyConfigured(
+            "Invalid VISIBILITY_AUDIT_SEVERITY_RULES: " + "; ".join(errors)
+        )
+
+    for key, value in user_rules.items():
+        if key not in ALLOWED_RULE_KEYS:
+            errors.append(
+                f"Unknown rule key '{key}'. "
+                f"Allowed keys: {sorted(ALLOWED_RULE_KEYS)}."
+            )
+            continue
+
+        if not isinstance(value, str):
+            errors.append(
+                f"Rule '{key}' has non-string severity value "
+                f"{repr(value)} ({type(value).__name__})."
+            )
+            continue
+
+        if value not in ALLOWED_SEVERITIES:
+            errors.append(
+                f"Rule '{key}' has invalid severity '{value}'. "
+                f"Allowed values: {sorted(ALLOWED_SEVERITIES)}."
+            )
+
+    if errors:
+        raise ImproperlyConfigured(
+            "Invalid VISIBILITY_AUDIT_SEVERITY_RULES: " + "; ".join(errors)
+        )
+
 
 def get_severity_rules():
     """
@@ -32,15 +75,19 @@ def get_severity_rules():
 
     settings 中配置项名称：VISIBILITY_AUDIT_SEVERITY_RULES
     支持部分覆盖，未指定的键使用默认值。
+
+    若 settings 中存在配置，会先校验其合法性，
+    不合法则抛出 ImproperlyConfigured。
     """
-    user_rules = getattr(settings, "VISIBILITY_AUDIT_SEVERITY_RULES", {})
-    if not isinstance(user_rules, dict):
-        user_rules = {}
+    user_rules = getattr(settings, "VISIBILITY_AUDIT_SEVERITY_RULES", None)
+    if user_rules is None:
+        return dict(DEFAULT_SEVERITY_RULES)
+
+    validate_severity_rules(user_rules)
 
     rules = dict(DEFAULT_SEVERITY_RULES)
     for key, value in user_rules.items():
-        if key in rules and value in SEVERITY_ORDER:
-            rules[key] = value
+        rules[key] = value
     return rules
 
 
