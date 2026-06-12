@@ -70,7 +70,9 @@ class PinVisibilityPolicy(BaseVisibilityPolicy):
     - 私有 Pin：仅对 submitter（所有者）可见
 
     推断规则：
-    - 若 Pin 所属的任意 Board 为 private=True，则推断该 Pin 应为 private
+    - 若 Pin 所属的任意 Board 为 private=True → 推断 Pin 应为 private
+    - 若 Pin 当前为 private，但被至少一个 public Board 引用 → 推断 Pin 应为 public
+      （private Pin 出现在 public Board 中是不一致配置，可能导致信息泄露）
     - 否则保持 Pin 自身的 private 值
     """
 
@@ -87,15 +89,21 @@ class PinVisibilityPolicy(BaseVisibilityPolicy):
 
     @classmethod
     def infer_privacy(cls, obj) -> bool:
-        if cls.is_private(obj):
-            return True
         from core.models import Board
+
         in_private_board = Board.objects.filter(
             pins=obj, private=True
         ).exists()
         if in_private_board:
             return True
-        return False
+
+        in_public_board = Board.objects.filter(
+            pins=obj, private=False
+        ).exists()
+        if cls.is_private(obj) and in_public_board:
+            return False
+
+        return cls.is_private(obj)
 
 
 class BoardVisibilityPolicy(BaseVisibilityPolicy):
@@ -106,9 +114,10 @@ class BoardVisibilityPolicy(BaseVisibilityPolicy):
     - 私有 Board：仅对 submitter（所有者）可见
 
     推断规则：
-    - 若 Board 已为 private，保持 True
-    - 若 Board 中所有 Pin 都属于其他用户且均为 private，
-      则推断该 Board 实际上应为 private（对非所有者无可见内容）
+    - 若 Board 中所有 Pin 都属于其他用户且均为 private → 推断 Board 应为 private
+      （对非所有者无可见内容）
+    - 若 Board 当前为 private，但包含至少一个 public Pin → 推断 Board 应为 public
+      （private Board 中出现 public Pin 是不一致配置，public Pin 本身对所有人可见）
     - 否则保持 Board 自身的 private 值
     """
 
@@ -125,15 +134,21 @@ class BoardVisibilityPolicy(BaseVisibilityPolicy):
 
     @classmethod
     def infer_privacy(cls, obj) -> bool:
-        if cls.is_private(obj):
-            return True
         owner = cls.get_owner(obj)
         pins = obj.pins.all()
+
         if not pins.exists():
+            return cls.is_private(obj)
+
+        has_public_pin = any(
+            not PinVisibilityPolicy.infer_privacy(pin) for pin in pins
+        )
+        if cls.is_private(obj) and has_public_pin:
             return False
+
         all_pins_invisible_to_others = True
         for pin in pins:
-            if not PinVisibilityPolicy.is_private(pin):
+            if not PinVisibilityPolicy.infer_privacy(pin):
                 all_pins_invisible_to_others = False
                 break
             if PinVisibilityPolicy.get_owner(pin) == owner:
@@ -141,4 +156,5 @@ class BoardVisibilityPolicy(BaseVisibilityPolicy):
                 break
         if all_pins_invisible_to_others:
             return True
-        return False
+
+        return cls.is_private(obj)
