@@ -111,7 +111,7 @@ const Pin = {
 };
 
 
-function fetchPins(offset, tagFilter, userFilter, boardFilter) {
+function fetchPins(offset, tagFilter, userFilter, boardFilter, cursorToken = null) {
   const url = `${API_PREFIX}pins/`;
   const queryArgs = {
     format: 'json',
@@ -122,6 +122,7 @@ function fetchPins(offset, tagFilter, userFilter, boardFilter) {
   if (tagFilter) queryArgs.tags__name = tagFilter;
   if (userFilter) queryArgs.submitter__username = userFilter;
   if (boardFilter) queryArgs.pins__id = boardFilter;
+  if (cursorToken) queryArgs.cursor_token = cursorToken;
   return axios.get(
     url,
     { params: queryArgs },

@@ -116,6 +116,7 @@ function initialData() {
       loading: false,
       hasNext: true,
       offset: 0,
+      cursorToken: null,
     },
     editorMeta: {
       currentEditId: null,
@@ -254,27 +255,28 @@ export default {
         return;
       }
       this.status.loading = true;
+      const token = created ? null : this.status.cursorToken;
       let promise;
       if (this.pinFilters.tagFilter) {
-        promise = API.fetchPins(this.status.offset, this.pinFilters.tagFilter, null, null);
+        promise = API.fetchPins(this.status.offset, this.pinFilters.tagFilter, null, null, token);
       } else if (this.pinFilters.userFilter) {
-        promise = API.fetchPins(this.status.offset, null, this.pinFilters.userFilter, null);
+        promise = API.fetchPins(this.status.offset, null, this.pinFilters.userFilter, null, token);
       } else if (this.pinFilters.boardFilter) {
         const prevPromise = API.Board.get(this.pinFilters.boardFilter);
         promise = prevPromise.then(
           (resp) => {
             this.editorMeta.currentBoard = resp.data;
-            return API.fetchPins(this.status.offset, null, null, this.pinFilters.boardFilter);
+            return API.fetchPins(this.status.offset, null, null, this.pinFilters.boardFilter, token);
           },
         );
       } else if (this.pinFilters.idFilter) {
         promise = API.fetchPin(this.pinFilters.idFilter);
       } else {
-        promise = API.fetchPins(this.status.offset);
+        promise = API.fetchPins(this.status.offset, null, null, null, token);
       }
       promise.then(
         (resp) => {
-          const { results, next } = resp.data;
+          const { results, next, cursor_token: cursorToken } = resp.data;
           let newBlocks = this.buildBlocks(results);
           newBlocks.forEach(
             (item) => { this.blocksMap[item.id] = item; },
@@ -283,9 +285,16 @@ export default {
           this.blocks = newBlocks;
           this.status.offset = newBlocks.length;
           this.status.hasNext = !(next === null);
+          this.status.cursorToken = cursorToken;
           this.status.loading = false;
         },
-        () => { this.status.loading = false; },
+        (error) => {
+          if (error && error.response && error.response.status === 409) {
+            this.reset();
+            return;
+          }
+          this.status.loading = false;
+        },
       );
     },
     niceLinks,

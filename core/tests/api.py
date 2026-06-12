@@ -390,3 +390,150 @@ class PinSearchByTagTests(APITestCase):
         public_count = sum(1 for p in data['results'] if not p['private'])
         self.assertEqual(private_count, 5)
         self.assertEqual(public_count, 5)
+
+
+class PinCursorTokenTests(APITestCase):
+
+    def setUp(self):
+        super(PinCursorTokenTests, self).setUp()
+        self.user = create_user("default")
+        self.client.login(username=self.user.username, password='password')
+
+    def tearDown(self):
+        _teardown_models()
+
+    def _create_pins_with_tag(self, user, tag_name, count, private=False):
+        pins = []
+        for i in range(count):
+            image = create_image()
+            pin = Pin.objects.create(
+                submitter=user,
+                image=image,
+                private=private,
+            )
+            pin.tags.add(tag_name)
+            pins.append(pin)
+        return pins
+
+    def test_should_include_cursor_token_in_paginated_response(self):
+        tag_name = "cursor_token_tag"
+        self._create_pins_with_tag(self.user, tag_name, 5)
+
+        url = reverse("pin-list") + f"?tags__name={tag_name}"
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn('cursor_token', data)
+        self.assertIsNotNone(data['cursor_token'])
+        self.assertIsInstance(data['cursor_token'], str)
+        self.assertGreater(len(data['cursor_token']), 0)
+
+    def test_should_return_409_when_using_stale_token_after_visibility_change(self):
+        tag_name = "visibility_change_tag"
+        other_user = create_user("other_for_cursor")
+        pins = self._create_pins_with_tag(other_user, tag_name, 25, private=False)
+
+        url = reverse("pin-list") + f"?tags__name={tag_name}&limit=10"
+        response1 = self.client.get(url)
+        self.assertEqual(response1.status_code, 200)
+        data1 = response1.json()
+        original_token = data1['cursor_token']
+        self.assertIsNotNone(original_token)
+        self.assertEqual(len(data1['results']), 10)
+
+        pins[0].private = True
+        pins[0].save()
+
+        next_url = reverse("pin-list") + f"?tags__name={tag_name}&limit=10&offset=10&cursor_token={original_token}"
+        response2 = self.client.get(next_url)
+
+        self.assertEqual(response2.status_code, 409)
+        error_data = response2.json()
+        self.assertIn('detail', error_data)
+        self.assertIn('cursor_token', error_data)
+        self.assertNotEqual(error_data['cursor_token'], original_token)
+
+    def test_should_return_200_when_using_valid_token_without_changes(self):
+        tag_name = "valid_token_tag"
+        self._create_pins_with_tag(self.user, tag_name, 25, private=False)
+
+        url = reverse("pin-list") + f"?tags__name={tag_name}&limit=10"
+        response1 = self.client.get(url)
+        self.assertEqual(response1.status_code, 200)
+        data1 = response1.json()
+        valid_token = data1['cursor_token']
+
+        next_url = reverse("pin-list") + f"?tags__name={tag_name}&limit=10&offset=10&cursor_token={valid_token}"
+        response2 = self.client.get(next_url)
+
+        self.assertEqual(response2.status_code, 200)
+        data2 = response2.json()
+        self.assertIn('results', data2)
+        self.assertIn('cursor_token', data2)
+
+    def test_should_not_check_token_for_first_page(self):
+        tag_name = "first_page_tag"
+        pins = self._create_pins_with_tag(self.user, tag_name, 5, private=False)
+
+        pins[0].private = True
+        pins[0].save()
+
+        url = reverse("pin-list") + f"?tags__name={tag_name}&cursor_token=obviously_wrong_token"
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn('results', data)
+        self.assertEqual(len(data['results']), 5)
+
+    def test_should_paginate_without_duplicates_after_reset_with_new_token(self):
+        tag_name = "reset_pagination_tag"
+        self._create_pins_with_tag(self.user, tag_name, 35, private=False)
+
+        url = reverse("pin-list") + f"?tags__name={tag_name}&limit=20"
+        response1 = self.client.get(url)
+        self.assertEqual(response1.status_code, 200)
+        data1 = response1.json()
+        stale_token = data1['cursor_token']
+        original_page1_ids = [p['id'] for p in data1['results']]
+        self.assertEqual(len(original_page1_ids), 20)
+
+        new_pin_image = create_image()
+        new_pin = Pin.objects.create(
+            submitter=self.user,
+            image=new_pin_image,
+            private=False,
+        )
+        new_pin.tags.add(tag_name)
+
+        stale_next_url = reverse("pin-list") + f"?tags__name={tag_name}&limit=20&offset=20&cursor_token={stale_token}"
+        response_stale = self.client.get(stale_next_url)
+        self.assertEqual(response_stale.status_code, 409)
+        new_token = response_stale.json()['cursor_token']
+
+        reset_url = reverse("pin-list") + f"?tags__name={tag_name}&limit=20"
+        response_reset = self.client.get(reset_url)
+        self.assertEqual(response_reset.status_code, 200)
+        data_reset = response_reset.json()
+        self.assertEqual(data_reset['cursor_token'], new_token)
+        reset_page1_ids = [p['id'] for p in data_reset['results']]
+        self.assertEqual(len(reset_page1_ids), 20)
+        self.assertIn(new_pin.id, reset_page1_ids,
+                      "New pin should appear on the first page (ordered by -id)")
+
+        next_url = reverse("pin-list") + f"?tags__name={tag_name}&limit=20&offset=20&cursor_token={new_token}"
+        response_next = self.client.get(next_url)
+        self.assertEqual(response_next.status_code, 200)
+        data_next = response_next.json()
+        reset_page2_ids = [p['id'] for p in data_next['results']]
+        self.assertEqual(len(reset_page2_ids), 16)
+
+        all_ids = reset_page1_ids + reset_page2_ids
+        unique_ids = list(set(all_ids))
+        self.assertEqual(len(all_ids), len(unique_ids),
+                         "Found duplicate pins across pages after reset")
+        self.assertEqual(len(unique_ids), 36,
+                         f"Expected 36 unique pins, got {len(unique_ids)}")
+        self.assertIsNone(data_next['next'],
+                          "Should have no more pages after page 2")
