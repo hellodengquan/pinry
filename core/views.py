@@ -8,6 +8,7 @@ from taggit.models import Tag
 
 from core import serializers as api
 from core.models import Image, Pin, Board
+from core.pagination import PermissionAwareLimitOffsetPagination
 from core.permissions import IsOwnerOrReadOnly, OwnerOnlyIfPrivate
 from core.serializers import filter_private_pin, filter_private_board
 
@@ -22,6 +23,7 @@ class ImageViewSet(mixins.CreateModelMixin, GenericViewSet):
 
 class PinViewSet(viewsets.ModelViewSet):
     serializer_class = api.PinSerializer
+    pagination_class = PermissionAwareLimitOffsetPagination
     filter_backends = (DjangoFilterBackend, SearchFilter, OrderingFilter)
     filter_fields = ("submitter__username", 'tags__name', "pins__id")
     search_fields = ("description", )
@@ -37,6 +39,7 @@ class PinViewSet(viewsets.ModelViewSet):
 
 class BoardViewSet(viewsets.ModelViewSet):
     serializer_class = api.BoardSerializer
+    pagination_class = PermissionAwareLimitOffsetPagination
     filter_backends = (DjangoFilterBackend, OrderingFilter, SearchFilter)
     search_fields = ("name", )
     filter_fields = ("submitter__username", )

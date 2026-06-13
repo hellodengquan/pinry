@@ -7,5 +7,6 @@ export default {
   events: {
     refreshPin: 'refreshPin',
     refreshBoards: 'refreshBoards',
+    authChanged: 'authChanged',
   },
 };

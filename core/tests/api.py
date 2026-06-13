@@ -479,6 +479,211 @@ class PinSearchFieldsTests(APITestCase):
                          "'delta' only appears in owner's private pin, anonymous should see 0")
 
 
+class PaginatorPermissionCountTests(APITestCase):
+    """
+    Regression tests for PermissionAwareLimitOffsetPagination.
+    Verifies that the custom paginator's count field respects permission
+    filtering and distinct(), and that count stays consistent across
+    auth-state transitions for the same Board/tag query.
+    """
+
+    def setUp(self):
+        super(PaginatorPermissionCountTests, self).setUp()
+        self.owner = create_user("pg_owner")
+        self.other = create_user("pg_other")
+
+        image_a = create_image()
+        image_b = create_image()
+        image_c = create_image()
+        image_d = create_image()
+
+        self.pin_pub_owner = Pin.objects.create(
+            submitter=self.owner, image=image_a, private=False,
+            description="pg owner public",
+        )
+        self.pin_priv_owner = Pin.objects.create(
+            submitter=self.owner, image=image_b, private=True,
+            description="pg owner private",
+        )
+        self.pin_pub_other = Pin.objects.create(
+            submitter=self.other, image=image_c, private=False,
+            description="pg other public",
+        )
+        self.pin_priv_other = Pin.objects.create(
+            submitter=self.other, image=image_d, private=True,
+            description="pg other private",
+        )
+
+        tag_x, _ = Tag.objects.get_or_create(name="pg_tag_x", slug="pg_tag_x")
+        self.pin_pub_owner.tags.add(tag_x)
+        self.pin_priv_owner.tags.add(tag_x)
+        self.pin_pub_other.tags.add(tag_x)
+        self.pin_priv_other.tags.add(tag_x)
+
+        self.board = Board.objects.create(
+            name="pg_test_board", submitter=self.owner, private=False,
+        )
+        self.board.pins.add(
+            self.pin_pub_owner, self.pin_priv_owner,
+            self.pin_pub_other, self.pin_priv_other,
+        )
+        self.board.save()
+        self.pin_list_url = reverse("pin-list")
+
+    def tearDown(self):
+        _teardown_models()
+
+    def test_anonymous_count_excludes_all_private(self):
+        resp = self.client.get(self.pin_list_url, {"pins__id": self.board.id})
+        data = resp.json()
+        self.assertEqual(data['count'], 2)
+        self.assertEqual(len(data['results']), 2)
+
+    def test_owner_count_includes_own_private(self):
+        self.client.login(username=self.owner.username, password='password')
+        resp = self.client.get(self.pin_list_url, {"pins__id": self.board.id})
+        data = resp.json()
+        self.assertEqual(data['count'], 3)
+        ids = {r['id'] for r in data['results']}
+        self.assertIn(self.pin_priv_owner.id, ids)
+        self.assertNotIn(self.pin_priv_other.id, ids)
+
+    def test_other_user_count_includes_own_private(self):
+        self.client.login(username=self.other.username, password='password')
+        resp = self.client.get(self.pin_list_url, {"pins__id": self.board.id})
+        data = resp.json()
+        self.assertEqual(data['count'], 3)
+        ids = {r['id'] for r in data['results']}
+        self.assertIn(self.pin_priv_other.id, ids)
+        self.assertNotIn(self.pin_priv_owner.id, ids)
+
+    def test_count_changes_after_login(self):
+        resp_anon = self.client.get(self.pin_list_url, {"pins__id": self.board.id})
+        self.assertEqual(resp_anon.json()['count'], 2)
+
+        self.client.login(username=self.owner.username, password='password')
+        resp_auth = self.client.get(self.pin_list_url, {"pins__id": self.board.id})
+        self.assertEqual(resp_auth.json()['count'], 3,
+                         "count should increase after login to include own private pins")
+
+    def test_count_changes_after_logout(self):
+        self.client.login(username=self.owner.username, password='password')
+        resp_auth = self.client.get(self.pin_list_url, {"pins__id": self.board.id})
+        self.assertEqual(resp_auth.json()['count'], 3)
+
+        self.client.logout()
+        resp_anon = self.client.get(self.pin_list_url, {"pins__id": self.board.id})
+        self.assertEqual(resp_anon.json()['count'], 2,
+                         "count should decrease after logout to exclude private pins")
+
+    def test_tag_filter_count_distinct_across_auth_states(self):
+        resp = self.client.get(self.pin_list_url, {"tags__name": "pg_tag_x"})
+        self.assertEqual(resp.json()['count'], 2)
+
+        self.client.login(username=self.owner.username, password='password')
+        resp = self.client.get(self.pin_list_url, {"tags__name": "pg_tag_x"})
+        self.assertEqual(resp.json()['count'], 3)
+
+        self.client.logout()
+        resp = self.client.get(self.pin_list_url, {"tags__name": "pg_tag_x"})
+        self.assertEqual(resp.json()['count'], 2,
+                         "count should revert after logout")
+
+    def test_next_url_reflects_correct_count(self):
+        for i in range(70):
+            image = create_image()
+            Pin.objects.create(
+                submitter=self.owner, image=image, private=(i % 3 == 0),
+                description=f"pg bulk {i}",
+            )
+        resp = self.client.get(self.pin_list_url, {"limit": 20})
+        data = resp.json()
+        self.assertEqual(len(data['results']), 20)
+        self.assertIsNotNone(data['next'])
+        anon_count = data['count']
+
+        resp2 = self.client.get(data['next'].replace("http://testserver", ""))
+        data2 = resp2.json()
+        self.assertEqual(data2['count'], anon_count,
+                         "count should be consistent across paginated pages")
+
+        self.client.login(username=self.owner.username, password='password')
+        resp3 = self.client.get(self.pin_list_url, {"limit": 20})
+        owner_count = resp3.json()['count']
+        self.assertGreater(owner_count, anon_count,
+                           "owner should see more pins (including own private) than anonymous")
+
+
+class BoardDetailPaginationCountTests(APITestCase):
+    """
+    Regression tests ensuring Board detail's total_pins matches the
+    paginated Pin list count when filtered by the same Board.
+    """
+
+    def setUp(self):
+        super(BoardDetailPaginationCountTests, self).setUp()
+        self.owner = create_user("bd_owner")
+        self.other = create_user("bd_other")
+
+        image_a = create_image()
+        image_b = create_image()
+        image_c = create_image()
+
+        self.pub_pin = Pin.objects.create(
+            submitter=self.owner, image=image_a, private=False,
+            description="bd public",
+        )
+        self.priv_pin = Pin.objects.create(
+            submitter=self.owner, image=image_b, private=True,
+            description="bd private",
+        )
+        self.other_priv_pin = Pin.objects.create(
+            submitter=self.other, image=image_c, private=True,
+            description="bd other private",
+        )
+
+        self.board = Board.objects.create(
+            name="bd_board", submitter=self.owner, private=False,
+        )
+        self.board.pins.add(self.pub_pin, self.priv_pin, self.other_priv_pin)
+        self.board.save()
+
+        self.board_url = reverse("board-detail", kwargs={"pk": self.board.pk})
+        self.pin_list_url = reverse("pin-list")
+
+    def tearDown(self):
+        _teardown_models()
+
+    def test_anonymous_total_pins_equals_pin_list_count(self):
+        board_resp = self.client.get(self.board_url)
+        pin_resp = self.client.get(self.pin_list_url, {"pins__id": self.board.id})
+        self.assertEqual(
+            board_resp.json()['total_pins'],
+            pin_resp.json()['count'],
+            "Board detail total_pins should match paginated Pin list count for anonymous",
+        )
+
+    def test_owner_total_pins_equals_pin_list_count(self):
+        self.client.login(username=self.owner.username, password='password')
+        board_resp = self.client.get(self.board_url)
+        pin_resp = self.client.get(self.pin_list_url, {"pins__id": self.board.id})
+        self.assertEqual(
+            board_resp.json()['total_pins'],
+            pin_resp.json()['count'],
+            "Board detail total_pins should match paginated Pin list count for owner",
+        )
+
+    def test_other_user_total_pins_equals_pin_list_count(self):
+        self.client.login(username=self.other.username, password='password')
+        board_resp = self.client.get(self.board_url)
+        pin_resp = self.client.get(self.pin_list_url, {"pins__id": self.board.id})
+        self.assertEqual(
+            board_resp.json()['total_pins'],
+            pin_resp.json()['count'],
+            "Board detail total_pins should match paginated Pin list count for other user",
+        )
+
+
 class PinPrivacyTests(APITestCase):
 
     def setUp(self):

@@ -219,6 +219,8 @@ const User = {
         axios.get('/api-auth/logout/').then(
           () => {
             storage.set(self.storageKey, null, 1);
+            storage.set(self.storageKey, null, 0);
+            localStorage.removeItem(self.storageKey);
             resolve();
           },
         );

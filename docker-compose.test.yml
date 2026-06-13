@@ -1,0 +1,16 @@
+version: '3'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: pinry_test
+      POSTGRES_USER: pinry
+      POSTGRES_PASSWORD: pinry
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pinry -d pinry_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 10

@@ -162,7 +162,7 @@ REST_FRAMEWORK = {
         'django_filters.rest_framework.DjangoFilterBackend',
     ),
     'URL_FIELD_NAME': DRF_URL_FIELD_NAME,
-    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.LimitOffsetPagination',
+    'DEFAULT_PAGINATION_CLASS': 'core.pagination.PermissionAwareLimitOffsetPagination',
     'PAGE_SIZE': API_LIMIT_PER_PAGE,
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework.authentication.BasicAuthentication',

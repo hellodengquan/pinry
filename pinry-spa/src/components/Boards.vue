@@ -130,7 +130,7 @@ export default {
     },
     initializeMeta() {
       const self = this;
-      API.User.fetchUserInfo().then(
+      API.User.fetchUserInfo(true).then(
         (user) => {
           if (user === null) {
             self.editorMeta.user.loggedIn = false;
@@ -239,8 +239,13 @@ export default {
   },
   created() {
     bus.bus.$on(bus.events.refreshBoards, this.reset);
+    bus.bus.$on(bus.events.authChanged, this.reset);
     this.registerScrollEvent();
     this.initialize();
+  },
+  beforeDestroy() {
+    bus.bus.$off(bus.events.refreshBoards, this.reset);
+    bus.bus.$off(bus.events.authChanged, this.reset);
   },
 };
 </script>

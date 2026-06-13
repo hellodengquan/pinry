@@ -139,6 +139,7 @@
 import localeUtils from '@/components/utils/i18n';
 import api from './api';
 import modals from './modals';
+import bus from './utils/bus';
 
 export default {
   name: 'p-header',
@@ -176,6 +177,7 @@ export default {
     logOut() {
       api.User.logOut().then(
         () => {
+          bus.bus.$emit(bus.events.authChanged);
           window.location.reload();
         },
       );
