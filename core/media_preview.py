@@ -1,4 +1,5 @@
 import re
+from urllib.parse import urlparse
 
 import PIL.Image
 import requests
@@ -19,6 +20,32 @@ class MediaPreviewService:
                       'Chrome/48.0.2564.82 Safari/537.36',
     }
 
+    ALLOWED_SCHEMES = {'http', 'https'}
+    MAX_REDIRECTS = 5
+    REQUEST_TIMEOUT = 15
+    MAX_CONTENT_LENGTH = 50 * 1024 * 1024
+    MAX_IMAGE_CONTENT_LENGTH = 20 * 1024 * 1024
+
+    YOUTUBE_PATTERN = re.compile(
+        r'^(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)(?P<id>[A-Za-z0-9_-]{11})',
+        re.IGNORECASE,
+    )
+    VIMEO_PATTERN = re.compile(
+        r'^(https?://)?(www\.)?vimeo\.com/(?P<id>\d+)',
+        re.IGNORECASE,
+    )
+
+    OEMBED_PROVIDERS = {
+        'youtube': {
+            'endpoint': 'https://www.youtube.com/oembed',
+            'params': {'format': 'json'},
+        },
+        'vimeo': {
+            'endpoint': 'https://vimeo.com/api/oembed.json',
+            'params': {},
+        },
+    }
+
     IMAGE_EXTENSIONS = {
         '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg',
         '.tiff', '.tif', '.ico',
@@ -29,7 +56,6 @@ class MediaPreviewService:
     }
 
     VIDEO_MIME_PREFIXES = ('video/',)
-
     IMAGE_MIME_PREFIXES = ('image/',)
 
     URL_PATTERN = re.compile(
@@ -37,10 +63,70 @@ class MediaPreviewService:
         re.IGNORECASE,
     )
 
+    class SecurityError(Exception):
+        pass
+
+    @classmethod
+    def _validate_url_scheme(cls, url):
+        parsed = urlparse(url)
+        if parsed.scheme not in cls.ALLOWED_SCHEMES:
+            raise cls.SecurityError(
+                'URL scheme %s is not allowed' % parsed.scheme,
+            )
+        return parsed
+
+    @classmethod
+    def _detect_video_provider(cls, url):
+        if cls.YOUTUBE_PATTERN.match(url):
+            return 'youtube'
+        if cls.VIMEO_PATTERN.match(url):
+            return 'vimeo'
+        return None
+
+    @classmethod
+    def _fetch_oembed(cls, url, provider):
+        try:
+            provider_config = cls.OEMBED_PROVIDERS.get(provider)
+            if not provider_config:
+                return None
+            params = dict(provider_config.get('params', {}))
+            params['url'] = url
+            response = requests.get(
+                provider_config['endpoint'],
+                params=params,
+                timeout=cls.REQUEST_TIMEOUT,
+                allow_redirects=True,
+            )
+            response.raise_for_status()
+            data = response.json()
+            result = {}
+            if 'title' in data:
+                result['title'] = data['title']
+            if 'thumbnail_url' in data:
+                result['thumbnail_url'] = data['thumbnail_url']
+            if 'thumbnail_width' in data:
+                result['thumbnail_width'] = data['thumbnail_width']
+            if 'thumbnail_height' in data:
+                result['thumbnail_height'] = data['thumbnail_height']
+            if 'duration' in data:
+                result['duration'] = data['duration']
+            if 'author_name' in data:
+                result['author_name'] = data['author_name']
+            if 'provider_name' in data:
+                result['provider_name'] = data['provider_name']
+            if 'html' in data:
+                result['embed_html'] = data['html']
+            return result
+        except (requests.RequestException, ValueError, KeyError):
+            return None
+
     @classmethod
     def detect_media_type(cls, url, content_type=None):
         if not url:
             return 'unknown'
+
+        if cls._detect_video_provider(url):
+            return 'video'
 
         lower_url = url.lower().split('?')[0].split('#')[0]
         ext = None
@@ -79,13 +165,67 @@ class MediaPreviewService:
             return True
 
     @classmethod
-    def _fetch_url(cls, url, referer=None):
+    def _fetch_url(cls, url, referer=None, max_content_length=None):
+        cls._validate_url_scheme(url)
+
+        if max_content_length is None:
+            max_content_length = cls.MAX_CONTENT_LENGTH
+
         headers = dict(cls._default_ua)
         if referer is not None:
+            cls._validate_url_scheme(referer)
             headers["Referer"] = referer
-        response = requests.get(url, headers=headers, timeout=30)
+
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=cls.REQUEST_TIMEOUT,
+            allow_redirects=True,
+            stream=True,
+        )
+
+        if len(response.history) > cls.MAX_REDIRECTS:
+            response.close()
+            raise cls.SecurityError(
+                'Too many redirects: %s' % len(response.history),
+            )
+
+        content_length_header = response.headers.get('Content-Length')
+        if content_length_header:
+            try:
+                content_length = int(content_length_header)
+                if content_length > max_content_length:
+                    response.close()
+                    raise cls.SecurityError(
+                        'Content-Length %s exceeds maximum allowed %s' % (
+                            content_length, max_content_length,
+                        ),
+                    )
+            except (ValueError, TypeError):
+                pass
+
         response.raise_for_status()
-        return response
+
+        content = BytesIO()
+        total_bytes = 0
+        for chunk in response.iter_content(chunk_size=8192):
+            if chunk:
+                total_bytes += len(chunk)
+                if total_bytes > max_content_length:
+                    response.close()
+                    raise cls.SecurityError(
+                        'Content exceeds maximum allowed size: %s' % max_content_length,
+                    )
+                content.write(chunk)
+
+        content.seek(0)
+        response.close()
+
+        wrapped_response = type('Response', (), {})()
+        wrapped_response.content = content.getvalue()
+        wrapped_response.headers = response.headers
+        wrapped_response.status_code = response.status_code
+        return wrapped_response
 
     @classmethod
     def _create_image_from_response(cls, url, response):
@@ -104,6 +244,21 @@ class MediaPreviewService:
         return image
 
     @classmethod
+    def _enrich_metadata_with_oembed(cls, url, metadata):
+        provider = cls._detect_video_provider(url)
+        if provider:
+            oembed_data = cls._fetch_oembed(url, provider)
+            if oembed_data:
+                metadata.update({
+                    'oembed': oembed_data,
+                    'title': oembed_data.get('title'),
+                    'thumbnail_url': oembed_data.get('thumbnail_url'),
+                    'duration': oembed_data.get('duration'),
+                    'provider': provider,
+                })
+        return metadata
+
+    @classmethod
     def build_preview_from_url(cls, url, referer=None):
         result = {
             'media_type': 'unknown',
@@ -115,15 +270,59 @@ class MediaPreviewService:
         }
 
         try:
-            response = cls._fetch_url(url, referer)
+            cls._validate_url_scheme(url)
+        except cls.SecurityError:
+            result['media_type'] = 'unknown'
+            result['metadata'] = {
+                'url': url,
+                'referer': referer or url,
+                'error': 'Invalid URL scheme',
+            }
+            return result
+
+        provider = cls._detect_video_provider(url)
+        if provider:
+            result['media_type'] = 'video'
+            result['video_url'] = url
+            result['metadata'] = cls._enrich_metadata_with_oembed(
+                url,
+                {
+                    'url': url,
+                    'referer': referer or url,
+                    'provider': provider,
+                },
+            )
+            return result
+
+        response = None
+        try:
+            response = cls._fetch_url(
+                url,
+                referer,
+                max_content_length=cls.MAX_IMAGE_CONTENT_LENGTH,
+            )
+        except cls.SecurityError as e:
+            result['media_type'] = cls.detect_media_type(url)
+            if result['media_type'] == 'web_link':
+                result['web_link_url'] = url
+            elif result['media_type'] == 'video':
+                result['video_url'] = url
+            result['metadata'] = {
+                'url': url,
+                'referer': referer or url,
+                'error': str(e),
+            }
+            return result
         except requests.RequestException:
             result['media_type'] = cls.detect_media_type(url)
             if result['media_type'] == 'web_link':
                 result['web_link_url'] = url
-                result['metadata'] = {
-                    'url': url,
-                    'referer': referer or url,
-                }
+            elif result['media_type'] == 'video':
+                result['video_url'] = url
+            result['metadata'] = {
+                'url': url,
+                'referer': referer or url,
+            }
             return result
 
         content_type = response.headers.get('Content-Type', '')
@@ -150,11 +349,14 @@ class MediaPreviewService:
                 }
         elif media_type == 'video':
             result['video_url'] = url
-            result['metadata'] = {
-                'url': url,
-                'referer': referer or url,
-                'content_type': content_type,
-            }
+            result['metadata'] = cls._enrich_metadata_with_oembed(
+                url,
+                {
+                    'url': url,
+                    'referer': referer or url,
+                    'content_type': content_type,
+                },
+            )
         else:
             result['web_link_url'] = url
             result['metadata'] = {

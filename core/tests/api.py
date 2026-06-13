@@ -18,22 +18,34 @@ def _teardown_models():
     Board.objects.all().delete()
 
 
-def mock_requests_get(url, **kwargs):
-    response = mock.Mock(
-        content=open('docs/src/imgs/logo-dark.png', 'rb').read(),
-        headers={'Content-Type': 'image/png'},
-    )
+def _create_mock_response(content, content_type='image/png', history=None):
+    if history is None:
+        history = []
+    response = mock.Mock()
+    response.content = content
+    response.headers = {'Content-Type': content_type}
+    response.status_code = 200
+    response.history = history
+
+    def _iter_content(chunk_size=8192):
+        for i in range(0, len(content), chunk_size):
+            yield content[i:i + chunk_size]
+
+    response.iter_content = _iter_content
     response.raise_for_status.return_value = None
+    response.close.return_value = None
     return response
+
+
+def mock_requests_get(url, **kwargs):
+    return _create_mock_response(
+        open('docs/src/imgs/logo-dark.png', 'rb').read(),
+        'image/png',
+    )
 
 
 def mock_requests_get_with_non_image_content(url, **kwargs):
-    response = mock.Mock(
-        content=b"abcd",
-        headers={'Content-Type': 'text/html'},
-    )
-    response.raise_for_status.return_value = None
-    return response
+    return _create_mock_response(b"abcd", 'text/html')
 
 
 class ImageTests(APITestCase):

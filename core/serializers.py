@@ -96,6 +96,7 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
             "submitter",
             "url",
             "media_type",
+            "metadata",
             "description",
             "referer",
             "image",
@@ -105,6 +106,7 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
 
     submitter = UserSerializer(read_only=True)
     media_type = serializers.SerializerMethodField(read_only=True)
+    metadata = serializers.SerializerMethodField(read_only=True)
     tags = TagSerializer(
         many=True,
         source="tag_list",
@@ -119,6 +121,16 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
 
     def get_media_type(self, obj):
         return MediaPreviewService.detect_media_type(obj.url)
+
+    def get_metadata(self, obj):
+        return getattr(obj, '_media_preview_metadata', {})
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        cached_metadata = getattr(instance, '_media_preview_metadata', None)
+        if cached_metadata is not None:
+            ret['metadata'] = cached_metadata
+        return ret
 
     def create(self, validated_data):
         if 'url' not in validated_data and\
@@ -137,12 +149,15 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
             image = preview.get('image')
             if not image:
                 raise ValidationError({"url": "invalid image content"})
+            metadata = preview.get('metadata', {})
         else:
             image = validated_data.pop("image_by_id")
+            metadata = {}
         tags = validated_data.pop('tag_list', [])
         pin = Pin.objects.create(submitter=submitter, image=image, **validated_data)
         if tags:
             pin.tags.set(*tags)
+        pin._media_preview_metadata = metadata
         return pin
 
     def update(self, instance, validated_data):

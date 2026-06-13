@@ -8,7 +8,13 @@
             </figure>
           </div>
           <div class="card-image video-preview" v-else-if="previewItem.mediaType === 'video'">
-            <video :src="previewItem.videoUrl" controls class="preview-video"></video>
+            <div class="video-container">
+              <div class="video-meta-overlay" v-if="previewItem.title || previewItem.duration">
+                <span class="video-title" v-if="previewItem.title">{{ previewItem.title }}</span>
+                <span class="video-duration" v-if="previewItem.duration">{{ previewItem.duration }}</span>
+              </div>
+              <video :src="previewItem.videoUrl" controls class="preview-video" :poster="previewItem.providerThumbnail || previewItem.largeImageUrl"></video>
+            </div>
           </div>
           <div class="card-image link-preview" v-else-if="previewItem.mediaType === 'web_link'">
             <a :href="previewItem.webLinkUrl" target="_blank" class="link-preview-card">
@@ -146,6 +152,39 @@ export default {
   max-height: 70vh;
   display: block;
   margin: 0 auto;
+}
+.video-container {
+  position: relative;
+  text-align: center;
+  padding: 10px;
+}
+.video-meta-overlay {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  z-index: 10;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.7), transparent);
+  color: #fff;
+}
+.video-title {
+  font-weight: 600;
+  font-size: 14px;
+  max-width: 70%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.video-duration {
+  font-size: 13px;
+  font-family: monospace;
+  background: rgba(0,0,0,0.5);
+  padding: 2px 6px;
+  border-radius: 3px;
 }
 .link-preview-card {
   display: block;

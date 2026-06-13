@@ -2,6 +2,7 @@ from django.test import TestCase
 import mock
 
 from core.media_preview import MediaPreviewService
+from core.tests.api import _create_mock_response
 
 
 class MediaTypeDetectionTests(TestCase):
@@ -75,32 +76,71 @@ class MediaTypeDetectionTests(TestCase):
             'unknown',
         )
 
+    def test_youtube_url(self):
+        self.assertEqual(
+            MediaPreviewService.detect_media_type('https://www.youtube.com/watch?v=dQw4w9WgXcQ'),
+            'video',
+        )
+
+    def test_youtu_be_url(self):
+        self.assertEqual(
+            MediaPreviewService.detect_media_type('https://youtu.be/dQw4w9WgXcQ'),
+            'video',
+        )
+
+    def test_vimeo_url(self):
+        self.assertEqual(
+            MediaPreviewService.detect_media_type('https://vimeo.com/123456789'),
+            'video',
+        )
+
 
 def _mock_image_response():
-    response = mock.Mock(
-        content=open('docs/src/imgs/logo-dark.png', 'rb').read(),
-        headers={'Content-Type': 'image/png'},
+    return _create_mock_response(
+        open('docs/src/imgs/logo-dark.png', 'rb').read(),
+        'image/png',
     )
-    response.raise_for_status.return_value = None
-    return response
 
 
 def _mock_non_image_response():
-    response = mock.Mock(
-        content=b'not an image',
-        headers={'Content-Type': 'text/html'},
-    )
-    response.raise_for_status.return_value = None
-    return response
+    return _create_mock_response(b'not an image', 'text/html')
 
 
 def _mock_video_response():
-    response = mock.Mock(
-        content=b'fake video data',
-        headers={'Content-Type': 'video/mp4'},
-    )
-    response.raise_for_status.return_value = None
-    return response
+    return _create_mock_response(b'fake video data', 'video/mp4')
+
+
+class SecurityTests(TestCase):
+    def test_file_scheme_rejected(self):
+        with self.assertRaises(MediaPreviewService.SecurityError):
+            MediaPreviewService._validate_url_scheme('file:///etc/passwd')
+
+    def test_ftp_scheme_rejected(self):
+        with self.assertRaises(MediaPreviewService.SecurityError):
+            MediaPreviewService._validate_url_scheme('ftp://example.com/file')
+
+    def test_http_scheme_allowed(self):
+        parsed = MediaPreviewService._validate_url_scheme('http://example.com/')
+        self.assertEqual(parsed.scheme, 'http')
+
+    def test_https_scheme_allowed(self):
+        parsed = MediaPreviewService._validate_url_scheme('https://example.com/')
+        self.assertEqual(parsed.scheme, 'https')
+
+    def test_too_many_redirects_rejected(self):
+        mock_resp = _create_mock_response(b'data', 'image/png', history=['r1', 'r2', 'r3', 'r4', 'r5', 'r6'])
+        with mock.patch('requests.get', return_value=mock_resp):
+            with self.assertRaises(MediaPreviewService.SecurityError) as ctx:
+                MediaPreviewService._fetch_url('http://example.com/')
+            self.assertIn('Too many redirects', str(ctx.exception))
+
+    def test_large_content_length_rejected(self):
+        mock_resp = _create_mock_response(b'x' * 1000, 'image/png')
+        mock_resp.headers['Content-Length'] = str(100 * 1024 * 1024)
+        with mock.patch('requests.get', return_value=mock_resp):
+            with self.assertRaises(MediaPreviewService.SecurityError) as ctx:
+                MediaPreviewService._fetch_url('http://example.com/', max_content_length=50 * 1024 * 1024)
+            self.assertIn('Content-Length', str(ctx.exception))
 
 
 class BuildPreviewFromUrlTests(TestCase):
@@ -138,6 +178,86 @@ class BuildPreviewFromUrlTests(TestCase):
         )
         self.assertEqual(result['media_type'], 'web_link')
         self.assertEqual(result['web_link_url'], 'http://example.com/page.html')
+
+    @mock.patch('requests.get')
+    def test_file_url_rejected(self, mock_get):
+        result = MediaPreviewService.build_preview_from_url(
+            'file:///etc/passwd',
+        )
+        self.assertEqual(result['media_type'], 'unknown')
+        self.assertIn('error', result['metadata'])
+        self.assertEqual(mock_get.call_count, 0)
+
+    @mock.patch('requests.get')
+    def test_youtube_url_uses_oembed(self, mock_get):
+        def mock_side_effect(*args, **kwargs):
+            url = args[0] if args else kwargs.get('url', '')
+            if 'youtube.com/oembed' in url:
+                oembed_resp = _create_mock_response(b'{}', 'application/json')
+                oembed_resp.json = lambda: {
+                    'title': 'Test Video',
+                    'thumbnail_url': 'https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+                    'duration': 120,
+                }
+                return oembed_resp
+            return _mock_video_response()
+
+        mock_get.side_effect = mock_side_effect
+        result = MediaPreviewService.build_preview_from_url(
+            'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        )
+        self.assertEqual(result['media_type'], 'video')
+        self.assertIn('oembed', result['metadata'])
+        self.assertEqual(result['metadata']['title'], 'Test Video')
+        self.assertEqual(result['metadata']['duration'], 120)
+
+    @mock.patch('requests.get')
+    def test_youtube_url_oembed_failure_survives(self, mock_get):
+        def mock_side_effect(*args, **kwargs):
+            raise Exception('oembed failed')
+
+        mock_get.side_effect = mock_side_effect
+        result = MediaPreviewService.build_preview_from_url(
+            'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        )
+        self.assertEqual(result['media_type'], 'video')
+        self.assertEqual(result['metadata']['provider'], 'youtube')
+
+
+class VideoProviderDetectionTests(TestCase):
+    def test_youtube_watch_url(self):
+        self.assertEqual(
+            MediaPreviewService._detect_video_provider('https://www.youtube.com/watch?v=dQw4w9WgXcQ'),
+            'youtube',
+        )
+
+    def test_youtu_be_short_url(self):
+        self.assertEqual(
+            MediaPreviewService._detect_video_provider('https://youtu.be/dQw4w9WgXcQ'),
+            'youtube',
+        )
+
+    def test_youtube_embed_url(self):
+        self.assertEqual(
+            MediaPreviewService._detect_video_provider('https://www.youtube.com/embed/dQw4w9WgXcQ'),
+            'youtube',
+        )
+
+    def test_vimeo_url(self):
+        self.assertEqual(
+            MediaPreviewService._detect_video_provider('https://vimeo.com/123456789'),
+            'vimeo',
+        )
+
+    def test_regular_image_url_not_detected(self):
+        self.assertIsNone(
+            MediaPreviewService._detect_video_provider('https://example.com/photo.jpg'),
+        )
+
+    def test_none_url_not_detected(self):
+        self.assertIsNone(
+            MediaPreviewService._detect_video_provider(None),
+        )
 
 
 class BuildDisplayItemTests(TestCase):
