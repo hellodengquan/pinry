@@ -1,11 +1,37 @@
+import os
+import socket
+import unittest
+
 from django.test import TestCase
+from django.core.cache import cache
 import mock
 
 from core.media_preview import MediaPreviewService
 from core.tests.api import _create_mock_response
 
 
+def _skip_if_offline():
+    if os.environ.get('PINRY_SKIP_INTEGRATION_TESTS'):
+        return True
+    try:
+        socket.setdefaulttimeout(3)
+        host = socket.gethostbyname('www.youtube.com')
+        return False
+    except (socket.gaierror, socket.timeout, OSError):
+        return True
+
+
+INTEGRATION_SKIP_REASON = (
+    'Offline environment or PINRY_SKIP_INTEGRATION_TESTS set; '
+    'run with network access to enable integration tests'
+)
+
+
 class MediaTypeDetectionTests(TestCase):
+    def setUp(self):
+        super().setUp()
+        cache.clear()
+
     def test_image_url_jpg(self):
         self.assertEqual(
             MediaPreviewService.detect_media_type('http://example.com/photo.jpg'),
@@ -94,6 +120,78 @@ class MediaTypeDetectionTests(TestCase):
             'video',
         )
 
+    def test_mp3_extension_blocked(self):
+        self.assertEqual(
+            MediaPreviewService.detect_media_type('http://example.com/audio.mp3'),
+            'blocked',
+        )
+
+    def test_wav_extension_blocked(self):
+        self.assertEqual(
+            MediaPreviewService.detect_media_type('http://example.com/audio.wav'),
+            'blocked',
+        )
+
+    def test_exe_extension_blocked(self):
+        self.assertEqual(
+            MediaPreviewService.detect_media_type('http://example.com/installer.exe'),
+            'blocked',
+        )
+
+    def test_apk_extension_blocked(self):
+        self.assertEqual(
+            MediaPreviewService.detect_media_type('http://example.com/app.apk'),
+            'blocked',
+        )
+
+    def test_audio_mime_blocked(self):
+        self.assertEqual(
+            MediaPreviewService.detect_media_type(
+                'http://example.com/stream',
+                content_type='audio/mpeg',
+            ),
+            'blocked',
+        )
+
+    def test_octet_stream_mime_blocked(self):
+        self.assertEqual(
+            MediaPreviewService.detect_media_type(
+                'http://example.com/download',
+                content_type='application/octet-stream',
+            ),
+            'blocked',
+        )
+
+    def test_pdf_mime_blocked(self):
+        self.assertEqual(
+            MediaPreviewService.detect_media_type(
+                'http://example.com/doc.pdf',
+                content_type='application/pdf',
+            ),
+            'blocked',
+        )
+
+    def test_msdownload_mime_blocked(self):
+        self.assertEqual(
+            MediaPreviewService.detect_media_type(
+                'http://example.com/file',
+                content_type='application/x-msdownload',
+            ),
+            'blocked',
+        )
+
+    def test_detect_result_cached(self):
+        url = 'http://example.com/unique-page-' + str(id(self)) + '.html'
+        cache.clear()
+        first = MediaPreviewService.detect_media_type(url)
+        second = MediaPreviewService.detect_media_type(url)
+        self.assertEqual(first, second)
+        cache_key = MediaPreviewService._cache_key(
+            MediaPreviewService.DETECT_MEDIA_TYPE_CACHE_KEY_PREFIX,
+            url, '',
+        )
+        self.assertIsNotNone(cache.get(cache_key))
+
 
 def _mock_image_response():
     return _create_mock_response(
@@ -110,7 +208,19 @@ def _mock_video_response():
     return _create_mock_response(b'fake video data', 'video/mp4')
 
 
+def _mock_mp3_response():
+    return _create_mock_response(b'fake mp3 data', 'audio/mpeg')
+
+
+def _mock_octet_stream_response():
+    return _create_mock_response(b'binary data', 'application/octet-stream')
+
+
 class SecurityTests(TestCase):
+    def setUp(self):
+        super().setUp()
+        cache.clear()
+
     def test_file_scheme_rejected(self):
         with self.assertRaises(MediaPreviewService.SecurityError):
             MediaPreviewService._validate_url_scheme('file:///etc/passwd')
@@ -142,8 +252,24 @@ class SecurityTests(TestCase):
                 MediaPreviewService._fetch_url('http://example.com/', max_content_length=50 * 1024 * 1024)
             self.assertIn('Content-Length', str(ctx.exception))
 
+    def test_mp3_extension_rejected_in_fetch(self):
+        mock_resp = _mock_mp3_response()
+        with mock.patch('requests.get', return_value=mock_resp):
+            with self.assertRaises(MediaPreviewService.BlockedContentTypeError):
+                MediaPreviewService._fetch_url('http://example.com/audio.mp3')
+
+    def test_audio_mime_rejected_in_fetch(self):
+        mock_resp = _mock_mp3_response()
+        with mock.patch('requests.get', return_value=mock_resp):
+            with self.assertRaises(MediaPreviewService.BlockedContentTypeError):
+                MediaPreviewService._fetch_url('http://example.com/stream')
+
 
 class BuildPreviewFromUrlTests(TestCase):
+    def setUp(self):
+        super().setUp()
+        cache.clear()
+
     @mock.patch('requests.get', return_value=_mock_image_response())
     def test_image_url_returns_image_type(self, mock_get):
         result = MediaPreviewService.build_preview_from_url(
@@ -212,6 +338,33 @@ class BuildPreviewFromUrlTests(TestCase):
         self.assertEqual(result['metadata']['duration'], 120)
 
     @mock.patch('requests.get')
+    def test_oembed_result_cached(self, mock_get):
+        cache.clear()
+        call_counter = [0]
+
+        def mock_side_effect(*args, **kwargs):
+            url = args[0] if args else kwargs.get('url', '')
+            if 'youtube.com/oembed' in url:
+                call_counter[0] += 1
+                oembed_resp = _create_mock_response(b'{}', 'application/json')
+                oembed_resp.json = lambda: {'title': 'Cached Video'}
+                return oembed_resp
+            return _mock_video_response()
+
+        mock_get.side_effect = mock_side_effect
+
+        url = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+        result1 = MediaPreviewService.build_preview_from_url(url)
+        result2 = MediaPreviewService.build_preview_from_url(url)
+
+        self.assertEqual(result1['metadata']['title'], 'Cached Video')
+        self.assertEqual(result2['metadata']['title'], 'Cached Video')
+        self.assertEqual(
+            call_counter[0], 1,
+            'oembed endpoint should be called only once due to caching',
+        )
+
+    @mock.patch('requests.get')
     def test_youtube_url_oembed_failure_survives(self, mock_get):
         def mock_side_effect(*args, **kwargs):
             raise Exception('oembed failed')
@@ -222,6 +375,22 @@ class BuildPreviewFromUrlTests(TestCase):
         )
         self.assertEqual(result['media_type'], 'video')
         self.assertEqual(result['metadata']['provider'], 'youtube')
+
+    @mock.patch('requests.get', return_value=_mock_mp3_response())
+    def test_mp3_url_blocked(self, mock_get):
+        result = MediaPreviewService.build_preview_from_url(
+            'http://example.com/song.mp3',
+        )
+        self.assertEqual(result['media_type'], 'blocked')
+        self.assertIn('error', result['metadata'])
+
+    @mock.patch('requests.get', return_value=_mock_octet_stream_response())
+    def test_octet_stream_blocked(self, mock_get):
+        result = MediaPreviewService.build_preview_from_url(
+            'http://example.com/download',
+        )
+        self.assertEqual(result['media_type'], 'blocked')
+        self.assertIn('error', result['metadata'])
 
 
 class VideoProviderDetectionTests(TestCase):
@@ -297,10 +466,66 @@ class BuildDisplayItemTests(TestCase):
             },
         }
 
-        display = MediaPreviewService.buildDisplayItem(pin)
+        display = MediaPreviewService.build_display_item(pin)
         self.assertEqual(display['id'], 1)
-        self.assertEqual(display['mediaType'], 'image')
+        self.assertEqual(display['media_type'], 'image')
         self.assertEqual(display['author'], 'testuser')
         self.assertEqual(display['avatar'], '//gravatar.com/avatar/abc123')
         self.assertIn('width', display['style'])
         self.assertIn('height', display['style'])
+
+
+class OEmbedIntegrationTests(TestCase):
+    def setUp(self):
+        super().setUp()
+        cache.clear()
+
+    @unittest.skipIf(_skip_if_offline(), INTEGRATION_SKIP_REASON)
+    def test_real_youtube_oembed(self):
+        url = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+        result = MediaPreviewService._fetch_oembed(url, 'youtube')
+        self.assertIsNotNone(
+            result,
+            'Expected YouTube oembed to return a result; check network connectivity',
+        )
+        self.assertIn('title', result)
+        self.assertIn('provider_name', result)
+        self.assertEqual(result['provider_name'], 'YouTube')
+
+    @unittest.skipIf(_skip_if_offline(), INTEGRATION_SKIP_REASON)
+    def test_real_vimeo_oembed(self):
+        url = 'https://vimeo.com/22439234'
+        result = MediaPreviewService._fetch_oembed(url, 'vimeo')
+        self.assertIsNotNone(
+            result,
+            'Expected Vimeo oembed to return a result; check network connectivity',
+        )
+        self.assertIn('title', result)
+        self.assertIn('provider_name', result)
+        self.assertEqual(result['provider_name'], 'Vimeo')
+
+    @unittest.skipIf(_skip_if_offline(), INTEGRATION_SKIP_REASON)
+    def test_real_youtube_oembed_with_build_preview(self):
+        url = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+        result = MediaPreviewService.build_preview_from_url(url)
+        self.assertEqual(result['media_type'], 'video')
+        self.assertIn('oembed', result['metadata'])
+        self.assertIn('title', result['metadata']['oembed'])
+        self.assertTrue(
+            result['metadata']['oembed']['provider_name'],
+            'YouTube',
+        )
+
+    @unittest.skipIf(_skip_if_offline(), INTEGRATION_SKIP_REASON)
+    def test_real_oembed_cached(self):
+        cache.clear()
+        url = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+        r1 = MediaPreviewService._fetch_oembed(url, 'youtube')
+        r2 = MediaPreviewService._fetch_oembed(url, 'youtube')
+        self.assertIsNotNone(r1)
+        self.assertEqual(r1, r2)
+        cache_key = MediaPreviewService._cache_key(
+            MediaPreviewService.OEMBED_CACHE_KEY_PREFIX, 'youtube', url,
+        )
+        cached = cache.get(cache_key)
+        self.assertIsNotNone(cached)

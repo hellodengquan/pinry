@@ -170,3 +170,40 @@ REST_FRAMEWORK = {
         'rest_framework.authentication.SessionAuthentication',
     ]
 }
+
+# Caching
+# Default: LocMemCache (per-process, works out of the box)
+# To use Redis, set environment variable:
+#   CACHE_BACKEND=django_redis.cache.RedisCache
+#   CACHE_LOCATION=redis://127.0.0.1:6379/1
+# To use database cache, create the cache table first:
+#   CACHE_BACKEND=django.core.cache.backends.db.DatabaseCache
+#   CACHE_LOCATION=pinry_cache_table
+#   ./manage.py createcachetable
+CACHE_BACKEND = os.environ.get('CACHE_BACKEND', None)
+CACHE_LOCATION = os.environ.get('CACHE_LOCATION', None)
+
+if CACHE_BACKEND:
+    CACHES = {
+        'default': {
+            'BACKEND': CACHE_BACKEND,
+            'LOCATION': CACHE_LOCATION if CACHE_LOCATION else 'default',
+            'OPTIONS': {
+                'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+            } if CACHE_BACKEND.startswith('django_redis') else {},
+            'KEY_PREFIX': 'pinry',
+            'TIMEOUT': 86400,
+        }
+    }
+else:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'pinry-default',
+            'KEY_PREFIX': 'pinry',
+            'TIMEOUT': 86400,
+        }
+    }
+
+OEMBED_CACHE_TIMEOUT = int(os.environ.get('OEMBED_CACHE_TIMEOUT', 60 * 60 * 24))
+DETECT_MEDIA_TYPE_CACHE_TIMEOUT = int(os.environ.get('DETECT_MEDIA_TYPE_CACHE_TIMEOUT', 60 * 60))

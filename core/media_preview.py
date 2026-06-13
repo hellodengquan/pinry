@@ -1,3 +1,4 @@
+import hashlib
 import re
 from urllib.parse import urlparse
 
@@ -7,6 +8,7 @@ import requests
 from io import BytesIO
 
 from django.conf import settings
+from django.core.cache import cache
 from django.core.files.uploadedfile import InMemoryUploadedFile
 
 from core.models import Image
@@ -25,6 +27,44 @@ class MediaPreviewService:
     REQUEST_TIMEOUT = 15
     MAX_CONTENT_LENGTH = 50 * 1024 * 1024
     MAX_IMAGE_CONTENT_LENGTH = 20 * 1024 * 1024
+
+    AUDIO_EXTENSIONS = {
+        '.mp3', '.wav', '.flac', '.aac', '.ogg', '.oga', '.m4a',
+        '.wma', '.opus', '.aiff', '.amr',
+    }
+    EXECUTABLE_EXTENSIONS = {
+        '.exe', '.msi', '.bat', '.cmd', '.sh', '.com', '.scr',
+        '.pif', '.app', '.dmg', '.pkg', '.deb', '.rpm', '.apk',
+        '.iso', '.jar', '.wsf', '.vbs', '.ps1', '.so', '.dll',
+    }
+
+    BLOCKED_MIME_PREFIXES = (
+        'audio/',
+        'application/x-msdownload',
+        'application/x-dosexec',
+        'application/x-executable',
+        'application/x-sharedlib',
+        'application/vnd.android.package-archive',
+        'application/x-apple-diskimage',
+        'application/x-iso9660-image',
+        'application/java-archive',
+        'application/x-sh',
+        'application/x-bat',
+    )
+    BLOCKED_MIME_EXACTS = {
+        'application/octet-stream',
+        'application/pdf',
+    }
+
+    OEMBED_CACHE_KEY_PREFIX = 'pinry:oembed:'
+    DETECT_MEDIA_TYPE_CACHE_KEY_PREFIX = 'pinry:detect:'
+
+    OEMBED_CACHE_TIMEOUT = getattr(
+        settings, 'OEMBED_CACHE_TIMEOUT', 60 * 60 * 24,
+    )
+    DETECT_MEDIA_TYPE_CACHE_TIMEOUT = getattr(
+        settings, 'DETECT_MEDIA_TYPE_CACHE_TIMEOUT', 60 * 60,
+    )
 
     YOUTUBE_PATTERN = re.compile(
         r'^(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)(?P<id>[A-Za-z0-9_-]{11})',
@@ -66,6 +106,15 @@ class MediaPreviewService:
     class SecurityError(Exception):
         pass
 
+    class BlockedContentTypeError(SecurityError):
+        pass
+
+    @classmethod
+    def _cache_key(cls, prefix, *parts):
+        raw = ':'.join(str(p) for p in parts)
+        digest = hashlib.md5(raw.encode('utf-8')).hexdigest()
+        return '%s%s' % (prefix, digest)
+
     @classmethod
     def _validate_url_scheme(cls, url):
         parsed = urlparse(url)
@@ -74,6 +123,37 @@ class MediaPreviewService:
                 'URL scheme %s is not allowed' % parsed.scheme,
             )
         return parsed
+
+    @classmethod
+    def _check_extension_blacklist(cls, url):
+        lower_url = url.lower().split('?')[0].split('#')[0]
+        for ext in cls.AUDIO_EXTENSIONS:
+            if lower_url.endswith(ext):
+                raise cls.BlockedContentTypeError(
+                    'Audio file extension %s is not allowed' % ext,
+                )
+        for ext in cls.EXECUTABLE_EXTENSIONS:
+            if lower_url.endswith(ext):
+                raise cls.BlockedContentTypeError(
+                    'Executable file extension %s is not allowed' % ext,
+                )
+        return None
+
+    @classmethod
+    def _check_mime_blacklist(cls, content_type):
+        if not content_type:
+            return None
+        ct = content_type.lower().split(';')[0].strip()
+        if ct in cls.BLOCKED_MIME_EXACTS:
+            raise cls.BlockedContentTypeError(
+                'Content type %s is not allowed' % ct,
+            )
+        for prefix in cls.BLOCKED_MIME_PREFIXES:
+            if ct.startswith(prefix):
+                raise cls.BlockedContentTypeError(
+                    'Content type %s is not allowed' % ct,
+                )
+        return None
 
     @classmethod
     def _detect_video_provider(cls, url):
@@ -85,6 +165,10 @@ class MediaPreviewService:
 
     @classmethod
     def _fetch_oembed(cls, url, provider):
+        cache_key = cls._cache_key(cls.OEMBED_CACHE_KEY_PREFIX, provider, url)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached if cached else None
         try:
             provider_config = cls.OEMBED_PROVIDERS.get(provider)
             if not provider_config:
@@ -116,41 +200,78 @@ class MediaPreviewService:
                 result['provider_name'] = data['provider_name']
             if 'html' in data:
                 result['embed_html'] = data['html']
+            cache.set(cache_key, result or False, cls.OEMBED_CACHE_TIMEOUT)
             return result
         except (requests.RequestException, ValueError, KeyError):
+            cache.set(cache_key, False, 60)
             return None
 
     @classmethod
-    def detect_media_type(cls, url, content_type=None):
+    def detect_media_type(cls, url, content_type=None, use_cache=True):
         if not url:
             return 'unknown'
 
-        if cls._detect_video_provider(url):
-            return 'video'
+        if use_cache:
+            cache_key = cls._cache_key(
+                cls.DETECT_MEDIA_TYPE_CACHE_KEY_PREFIX,
+                url,
+                content_type or '',
+            )
+            cached = cache.get(cache_key)
+            if cached is not None:
+                return cached
 
-        lower_url = url.lower().split('?')[0].split('#')[0]
-        ext = None
-        for e in list(cls.IMAGE_EXTENSIONS) + list(cls.VIDEO_EXTENSIONS):
-            if lower_url.endswith(e):
-                ext = e
-                break
-
-        if ext:
-            if ext in cls.VIDEO_EXTENSIONS:
-                return 'video'
-            if ext in cls.IMAGE_EXTENSIONS:
-                return 'image'
+        try:
+            cls._check_extension_blacklist(url)
+        except cls.BlockedContentTypeError:
+            if use_cache:
+                cache.set(
+                    cache_key, 'blocked',
+                    cls.DETECT_MEDIA_TYPE_CACHE_TIMEOUT,
+                )
+            return 'blocked'
 
         if content_type:
-            if content_type.startswith(cls.VIDEO_MIME_PREFIXES):
-                return 'video'
-            if content_type.startswith(cls.IMAGE_MIME_PREFIXES):
-                return 'image'
+            try:
+                cls._check_mime_blacklist(content_type)
+            except cls.BlockedContentTypeError:
+                if use_cache:
+                    cache.set(
+                        cache_key, 'blocked',
+                        cls.DETECT_MEDIA_TYPE_CACHE_TIMEOUT,
+                    )
+                return 'blocked'
 
-        if cls.URL_PATTERN.match(url):
-            return 'web_link'
+        result = 'unknown'
 
-        return 'unknown'
+        if cls._detect_video_provider(url):
+            result = 'video'
+        else:
+            lower_url = url.lower().split('?')[0].split('#')[0]
+            ext = None
+            for e in list(cls.IMAGE_EXTENSIONS) + list(cls.VIDEO_EXTENSIONS):
+                if lower_url.endswith(e):
+                    ext = e
+                    break
+
+            if ext:
+                if ext in cls.VIDEO_EXTENSIONS:
+                    result = 'video'
+                elif ext in cls.IMAGE_EXTENSIONS:
+                    result = 'image'
+            elif content_type:
+                if content_type.startswith(cls.VIDEO_MIME_PREFIXES):
+                    result = 'video'
+                elif content_type.startswith(cls.IMAGE_MIME_PREFIXES):
+                    result = 'image'
+                elif cls.URL_PATTERN.match(url):
+                    result = 'web_link'
+            elif cls.URL_PATTERN.match(url):
+                result = 'web_link'
+
+        if use_cache and result != 'unknown':
+            cache.set(cache_key, result, cls.DETECT_MEDIA_TYPE_CACHE_TIMEOUT)
+        return result
 
     @classmethod
     def _is_valid_image(cls, fp):
@@ -167,6 +288,7 @@ class MediaPreviewService:
     @classmethod
     def _fetch_url(cls, url, referer=None, max_content_length=None):
         cls._validate_url_scheme(url)
+        cls._check_extension_blacklist(url)
 
         if max_content_length is None:
             max_content_length = cls.MAX_CONTENT_LENGTH
@@ -203,6 +325,9 @@ class MediaPreviewService:
                     )
             except (ValueError, TypeError):
                 pass
+
+        content_type = response.headers.get('Content-Type', '')
+        cls._check_mime_blacklist(content_type)
 
         response.raise_for_status()
 
@@ -271,12 +396,22 @@ class MediaPreviewService:
 
         try:
             cls._validate_url_scheme(url)
-        except cls.SecurityError:
+        except cls.SecurityError as e:
             result['media_type'] = 'unknown'
             result['metadata'] = {
                 'url': url,
                 'referer': referer or url,
-                'error': 'Invalid URL scheme',
+                'error': 'Invalid URL scheme: %s' % e,
+            }
+            return result
+
+        pre_detected = cls.detect_media_type(url)
+        if pre_detected == 'blocked':
+            result['media_type'] = 'blocked'
+            result['metadata'] = {
+                'url': url,
+                'referer': referer or url,
+                'error': 'Content blocked by extension or MIME type policy',
             }
             return result
 
@@ -301,6 +436,14 @@ class MediaPreviewService:
                 referer,
                 max_content_length=cls.MAX_IMAGE_CONTENT_LENGTH,
             )
+        except cls.BlockedContentTypeError as e:
+            result['media_type'] = 'blocked'
+            result['metadata'] = {
+                'url': url,
+                'referer': referer or url,
+                'error': str(e),
+            }
+            return result
         except cls.SecurityError as e:
             result['media_type'] = cls.detect_media_type(url)
             if result['media_type'] == 'web_link':
@@ -328,6 +471,14 @@ class MediaPreviewService:
         content_type = response.headers.get('Content-Type', '')
         media_type = cls.detect_media_type(url, content_type)
         result['media_type'] = media_type
+
+        if media_type == 'blocked':
+            result['metadata'] = {
+                'url': url,
+                'referer': referer or url,
+                'error': 'Content blocked by MIME type policy',
+            }
+            return result
 
         if media_type == 'image':
             image = cls._create_image_from_response(url, response)
