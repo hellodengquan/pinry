@@ -36,6 +36,7 @@ class MediaPreviewService:
         '.exe', '.msi', '.bat', '.cmd', '.sh', '.com', '.scr',
         '.pif', '.app', '.dmg', '.pkg', '.deb', '.rpm', '.apk',
         '.iso', '.jar', '.wsf', '.vbs', '.ps1', '.so', '.dll',
+        '.svg',
     }
 
     BLOCKED_MIME_PREFIXES = (
@@ -54,6 +55,7 @@ class MediaPreviewService:
     BLOCKED_MIME_EXACTS = {
         'application/octet-stream',
         'application/pdf',
+        'image/svg+xml',
     }
 
     OEMBED_CACHE_KEY_PREFIX = 'pinry:oembed:'
@@ -87,7 +89,7 @@ class MediaPreviewService:
     }
 
     IMAGE_EXTENSIONS = {
-        '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg',
+        '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp',
         '.tiff', '.tif', '.ico',
     }
 
@@ -114,6 +116,27 @@ class MediaPreviewService:
         raw = ':'.join(str(p) for p in parts)
         digest = hashlib.md5(raw.encode('utf-8')).hexdigest()
         return '%s%s' % (prefix, digest)
+
+    @classmethod
+    def invalidate_cache_for_url(cls, url, referer=None):
+        if not url:
+            return
+        provider = cls._detect_video_provider(url)
+        if provider:
+            oembed_key = cls._cache_key(
+                cls.OEMBED_CACHE_KEY_PREFIX, provider, url,
+            )
+            cache.delete(oembed_key)
+        detect_key = cls._cache_key(
+            cls.DETECT_MEDIA_TYPE_CACHE_KEY_PREFIX, url, '',
+        )
+        cache.delete(detect_key)
+        if referer:
+            detect_key_with_ref = cls._cache_key(
+                cls.DETECT_MEDIA_TYPE_CACHE_KEY_PREFIX,
+                url, referer,
+            )
+            cache.delete(detect_key_with_ref)
 
     @classmethod
     def _validate_url_scheme(cls, url):

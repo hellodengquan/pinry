@@ -1,6 +1,12 @@
 const IMAGE_EXTENSIONS = [
-  '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg',
+  '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp',
   '.tiff', '.tif', '.ico',
+];
+
+const BLOCKED_EXTENSIONS = [
+  '.svg', '.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a',
+  '.wma', '.opus', '.exe', '.msi', '.bat', '.cmd', '.sh',
+  '.com', '.scr', '.apk', '.dmg', '.iso', '.jar', '.dll',
 ];
 
 const VIDEO_EXTENSIONS = [
@@ -55,6 +61,10 @@ function detectMediaType(url) {
   if (detectVideoProvider(url)) return 'video';
 
   const lowerUrl = url.toLowerCase().split('?')[0].split('#')[0];
+
+  for (let i = 0; i < BLOCKED_EXTENSIONS.length; i++) {
+    if (lowerUrl.endsWith(BLOCKED_EXTENSIONS[i])) return 'blocked';
+  }
 
   for (let i = 0; i < VIDEO_EXTENSIONS.length; i++) {
     if (lowerUrl.endsWith(VIDEO_EXTENSIONS[i])) return 'video';

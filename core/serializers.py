@@ -161,14 +161,22 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
         return pin
 
     def update(self, instance, validated_data):
+        old_url = instance.url
+        old_referer = instance.referer
         tags = validated_data.pop('tag_list', None)
         if tags:
             instance.tags.set(*tags)
         else:
             instance.tags.set()
-        # change for image-id or image is not allowed
         validated_data.pop('image_by_id', None)
-        return super(PinSerializer, self).update(instance, validated_data)
+        new_instance = super(PinSerializer, self).update(instance, validated_data)
+        new_url = validated_data.get('url', old_url)
+        new_referer = validated_data.get('referer', old_referer)
+        if new_url != old_url or new_referer != old_referer:
+            MediaPreviewService.invalidate_cache_for_url(new_url, new_referer)
+            if old_url and old_url != new_url:
+                MediaPreviewService.invalidate_cache_for_url(old_url, old_referer)
+        return new_instance
 
 
 class PinIdListField(serializers.ListField):

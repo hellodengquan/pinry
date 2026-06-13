@@ -1,30 +1,12 @@
 import os
-import socket
 import unittest
 
-from django.test import TestCase
+from django.test import TestCase, LiveServerTestCase
 from django.core.cache import cache
 import mock
 
 from core.media_preview import MediaPreviewService
 from core.tests.api import _create_mock_response
-
-
-def _skip_if_offline():
-    if os.environ.get('PINRY_SKIP_INTEGRATION_TESTS'):
-        return True
-    try:
-        socket.setdefaulttimeout(3)
-        host = socket.gethostbyname('www.youtube.com')
-        return False
-    except (socket.gaierror, socket.timeout, OSError):
-        return True
-
-
-INTEGRATION_SKIP_REASON = (
-    'Offline environment or PINRY_SKIP_INTEGRATION_TESTS set; '
-    'run with network access to enable integration tests'
-)
 
 
 class MediaTypeDetectionTests(TestCase):
@@ -144,6 +126,21 @@ class MediaTypeDetectionTests(TestCase):
             'blocked',
         )
 
+    def test_svg_extension_blocked(self):
+        self.assertEqual(
+            MediaPreviewService.detect_media_type('http://example.com/icon.svg'),
+            'blocked',
+        )
+
+    def test_svg_mime_blocked(self):
+        self.assertEqual(
+            MediaPreviewService.detect_media_type(
+                'http://example.com/icon',
+                content_type='image/svg+xml',
+            ),
+            'blocked',
+        )
+
     def test_audio_mime_blocked(self):
         self.assertEqual(
             MediaPreviewService.detect_media_type(
@@ -212,6 +209,14 @@ def _mock_mp3_response():
     return _create_mock_response(b'fake mp3 data', 'audio/mpeg')
 
 
+def _mock_svg_response():
+    return _create_mock_response(
+        b'<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg">'
+        b'<script>alert("xss")</script></svg>',
+        'image/svg+xml',
+    )
+
+
 def _mock_octet_stream_response():
     return _create_mock_response(b'binary data', 'application/octet-stream')
 
@@ -263,6 +268,79 @@ class SecurityTests(TestCase):
         with mock.patch('requests.get', return_value=mock_resp):
             with self.assertRaises(MediaPreviewService.BlockedContentTypeError):
                 MediaPreviewService._fetch_url('http://example.com/stream')
+
+    def test_svg_extension_rejected_in_fetch(self):
+        mock_resp = _mock_svg_response()
+        with mock.patch('requests.get', return_value=mock_resp):
+            with self.assertRaises(MediaPreviewService.BlockedContentTypeError):
+                MediaPreviewService._fetch_url('http://example.com/icon.svg')
+
+    def test_svg_mime_rejected_in_fetch(self):
+        mock_resp = _mock_svg_response()
+        with mock.patch('requests.get', return_value=mock_resp):
+            with self.assertRaises(MediaPreviewService.BlockedContentTypeError):
+                MediaPreviewService._fetch_url('http://example.com/icon')
+
+
+class CacheInvalidationTests(TestCase):
+    def setUp(self):
+        super().setUp()
+        cache.clear()
+
+    def test_invalidate_oembed_cache(self):
+        url = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+        provider = 'youtube'
+        cache_key = MediaPreviewService._cache_key(
+            MediaPreviewService.OEMBED_CACHE_KEY_PREFIX, provider, url,
+        )
+        cache.set(cache_key, {'title': 'Old Title'}, 3600)
+        self.assertIsNotNone(cache.get(cache_key))
+
+        MediaPreviewService.invalidate_cache_for_url(url)
+
+        self.assertIsNone(cache.get(cache_key))
+
+    def test_invalidate_detect_cache(self):
+        url = 'http://example.com/photo.jpg'
+        cache_key = MediaPreviewService._cache_key(
+            MediaPreviewService.DETECT_MEDIA_TYPE_CACHE_KEY_PREFIX, url, '',
+        )
+        cache.set(cache_key, 'image', 3600)
+        self.assertIsNotNone(cache.get(cache_key))
+
+        MediaPreviewService.invalidate_cache_for_url(url)
+
+        self.assertIsNone(cache.get(cache_key))
+
+    def test_invalidate_old_url_on_change(self):
+        old_url = 'https://www.youtube.com/watch?v=OLD_VIDEO_ID'
+        new_url = 'https://www.youtube.com/watch?v=NEW_VIDEO_ID'
+        old_key = MediaPreviewService._cache_key(
+            MediaPreviewService.OEMBED_CACHE_KEY_PREFIX, 'youtube', old_url,
+        )
+        new_key = MediaPreviewService._cache_key(
+            MediaPreviewService.OEMBED_CACHE_KEY_PREFIX, 'youtube', new_url,
+        )
+        cache.set(old_key, {'title': 'Old Video'}, 3600)
+        cache.set(new_key, {'title': 'New Video'}, 3600)
+
+        MediaPreviewService.invalidate_cache_for_url(new_url)
+        if old_url != new_url:
+            MediaPreviewService.invalidate_cache_for_url(old_url)
+
+        self.assertIsNone(cache.get(old_key))
+        self.assertIsNone(cache.get(new_key))
+
+    def test_invalidate_non_video_url_only_deletes_detect(self):
+        url = 'http://example.com/page.html'
+        detect_key = MediaPreviewService._cache_key(
+            MediaPreviewService.DETECT_MEDIA_TYPE_CACHE_KEY_PREFIX, url, '',
+        )
+        cache.set(detect_key, 'web_link', 3600)
+
+        MediaPreviewService.invalidate_cache_for_url(url)
+
+        self.assertIsNone(cache.get(detect_key))
 
 
 class BuildPreviewFromUrlTests(TestCase):
@@ -392,6 +470,14 @@ class BuildPreviewFromUrlTests(TestCase):
         self.assertEqual(result['media_type'], 'blocked')
         self.assertIn('error', result['metadata'])
 
+    @mock.patch('requests.get', return_value=_mock_svg_response())
+    def test_svg_url_blocked(self, mock_get):
+        result = MediaPreviewService.build_preview_from_url(
+            'http://example.com/icon.svg',
+        )
+        self.assertEqual(result['media_type'], 'blocked')
+        self.assertIn('error', result['metadata'])
+
 
 class VideoProviderDetectionTests(TestCase):
     def test_youtube_watch_url(self):
@@ -475,57 +561,91 @@ class BuildDisplayItemTests(TestCase):
         self.assertIn('height', display['style'])
 
 
-class OEmbedIntegrationTests(TestCase):
+YOUTUBE_VIDEO_URL = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+VIMEO_VIDEO_URL = 'https://vimeo.com/22439234'
+
+
+@unittest.skipUnless(
+    os.environ.get('PINRY_LIVE_OEMBED_TESTS'),
+    'Set PINRY_LIVE_OEMBED_TESTS=1 to run live oembed integration tests '
+    'against real YouTube / Vimeo endpoints',
+)
+class OEmbedLiveIntegrationTests(LiveServerTestCase):
     def setUp(self):
         super().setUp()
         cache.clear()
 
-    @unittest.skipIf(_skip_if_offline(), INTEGRATION_SKIP_REASON)
-    def test_real_youtube_oembed(self):
-        url = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
-        result = MediaPreviewService._fetch_oembed(url, 'youtube')
+    def test_live_youtube_oembed_returns_required_fields(self):
+        result = MediaPreviewService._fetch_oembed(YOUTUBE_VIDEO_URL, 'youtube')
         self.assertIsNotNone(
             result,
-            'Expected YouTube oembed to return a result; check network connectivity',
+            'YouTube oembed returned None; check network or endpoint change',
         )
-        self.assertIn('title', result)
-        self.assertIn('provider_name', result)
+        self.assertIn('title', result, 'YouTube oembed missing "title" field')
+        self.assertIn('thumbnail_url', result, 'YouTube oembed missing "thumbnail_url" field')
+        self.assertIn('provider_name', result, 'YouTube oembed missing "provider_name" field')
         self.assertEqual(result['provider_name'], 'YouTube')
+        self.assertTrue(
+            result['thumbnail_url'].startswith('https://'),
+            'YouTube thumbnail_url should be https: %s' % result['thumbnail_url'],
+        )
 
-    @unittest.skipIf(_skip_if_offline(), INTEGRATION_SKIP_REASON)
-    def test_real_vimeo_oembed(self):
-        url = 'https://vimeo.com/22439234'
-        result = MediaPreviewService._fetch_oembed(url, 'vimeo')
+    def test_live_vimeo_oembed_returns_required_fields(self):
+        result = MediaPreviewService._fetch_oembed(VIMEO_VIDEO_URL, 'vimeo')
         self.assertIsNotNone(
             result,
-            'Expected Vimeo oembed to return a result; check network connectivity',
+            'Vimeo oembed returned None; check network or endpoint change',
         )
-        self.assertIn('title', result)
-        self.assertIn('provider_name', result)
+        self.assertIn('title', result, 'Vimeo oembed missing "title" field')
+        self.assertIn('thumbnail_url', result, 'Vimeo oembed missing "thumbnail_url" field')
+        self.assertIn('provider_name', result, 'Vimeo oembed missing "provider_name" field')
         self.assertEqual(result['provider_name'], 'Vimeo')
-
-    @unittest.skipIf(_skip_if_offline(), INTEGRATION_SKIP_REASON)
-    def test_real_youtube_oembed_with_build_preview(self):
-        url = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
-        result = MediaPreviewService.build_preview_from_url(url)
-        self.assertEqual(result['media_type'], 'video')
-        self.assertIn('oembed', result['metadata'])
-        self.assertIn('title', result['metadata']['oembed'])
         self.assertTrue(
-            result['metadata']['oembed']['provider_name'],
-            'YouTube',
+            result['thumbnail_url'].startswith('https://'),
+            'Vimeo thumbnail_url should be https: %s' % result['thumbnail_url'],
         )
 
-    @unittest.skipIf(_skip_if_offline(), INTEGRATION_SKIP_REASON)
-    def test_real_oembed_cached(self):
-        cache.clear()
-        url = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+    def test_live_youtube_build_preview_full_flow(self):
+        result = MediaPreviewService.build_preview_from_url(YOUTUBE_VIDEO_URL)
+        self.assertEqual(result['media_type'], 'video')
+        self.assertEqual(result['video_url'], YOUTUBE_VIDEO_URL)
+        self.assertIn('oembed', result['metadata'])
+        oembed = result['metadata']['oembed']
+        self.assertIn('title', oembed)
+        self.assertIn('thumbnail_url', oembed)
+        self.assertEqual(oembed['provider_name'], 'YouTube')
+
+    def test_live_youtube_schema_fields_type_validation(self):
+        result = MediaPreviewService._fetch_oembed(YOUTUBE_VIDEO_URL, 'youtube')
+        self.assertIsNotNone(result)
+        self.assertIsInstance(result['title'], str)
+        self.assertIsInstance(result['thumbnail_url'], str)
+        if 'thumbnail_width' in result:
+            self.assertIsInstance(result['thumbnail_width'], int)
+        if 'thumbnail_height' in result:
+            self.assertIsInstance(result['thumbnail_height'], int)
+
+    def test_live_vimeo_schema_fields_type_validation(self):
+        result = MediaPreviewService._fetch_oembed(VIMEO_VIDEO_URL, 'vimeo')
+        self.assertIsNotNone(result)
+        self.assertIsInstance(result['title'], str)
+        self.assertIsInstance(result['thumbnail_url'], str)
+        if 'duration' in result:
+            self.assertIsInstance(result['duration'], int)
+
+    def test_live_oembed_cache_then_invalidate(self):
+        url = YOUTUBE_VIDEO_URL
         r1 = MediaPreviewService._fetch_oembed(url, 'youtube')
-        r2 = MediaPreviewService._fetch_oembed(url, 'youtube')
         self.assertIsNotNone(r1)
-        self.assertEqual(r1, r2)
         cache_key = MediaPreviewService._cache_key(
             MediaPreviewService.OEMBED_CACHE_KEY_PREFIX, 'youtube', url,
         )
-        cached = cache.get(cache_key)
-        self.assertIsNotNone(cached)
+        self.assertIsNotNone(cache.get(cache_key))
+
+        MediaPreviewService.invalidate_cache_for_url(url)
+        self.assertIsNone(cache.get(cache_key))
+
+        r2 = MediaPreviewService._fetch_oembed(url, 'youtube')
+        self.assertIsNotNone(r2)
+        self.assertEqual(r1['title'], r2['title'])
+

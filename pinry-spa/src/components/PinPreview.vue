@@ -23,6 +23,18 @@
             </a>
             <img v-if="previewItem.largeImageUrl" :src="previewItem.largeImageUrl" alt="Preview">
           </div>
+          <div class="card-image blocked-preview" v-else-if="previewItem.mediaType === 'blocked'">
+            <div class="blocked-notice">
+              <b-icon icon="lock" size="is-large" type="is-danger"></b-icon>
+              <p>Content blocked for security reasons</p>
+            </div>
+          </div>
+          <div class="card-image unknown-preview" v-else>
+            <div class="unknown-notice">
+              <b-icon icon="help-circle" size="is-large"></b-icon>
+              <p>Unsupported media type</p>
+            </div>
+          </div>
           <div class="card-content">
             <div class="content">
                 <p class="description title" v-html="niceLinks(previewItem.description)"></p>
@@ -194,6 +206,16 @@ export default {
   .link-url {
     margin-top: 10px;
     word-break: break-all;
+    font-size: 14px;
+  }
+}
+.blocked-preview .blocked-notice,
+.unknown-preview .unknown-notice {
+  text-align: center;
+  padding: 60px 20px;
+  color: #aaa;
+  p {
+    margin-top: 12px;
     font-size: 14px;
   }
 }
