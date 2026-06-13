@@ -132,6 +132,10 @@
   "errorTypeFilterLabel": "按错误类型筛选",
   "linkCheckCancelTask": "停止巡检",
   "linkCheckTaskCancelled": "已取消",
+  "linkCheckRecheckAllFailed": "重试全部失效项",
+  "linkCheckRecheckAllConfirm": "确定要重试全部失效链接吗？这可能需要较长时间。",
+  "linkCheckRecheckAllSummary": "已完成 {0} 次重试：正常 {1}，仍失效 {2}，跳过 {3}",
+  "linkCheckRecheckAllFailedErr": "批量重试失败，请稍后再试",
   "loadingMore": "加载更多...",
   "noMoreData": "没有更多数据"
 }

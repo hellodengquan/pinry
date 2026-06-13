@@ -265,6 +265,7 @@ def create_link_check_records(pins, task: LinkCheckTask | None = None):
                 url=pin.url,
                 status=LinkCheck.Status.PENDING,
                 action_status=LinkCheck.ActionStatus.UNHANDLED,
+                task=task,
             )
         )
         url_map[pin.id] = pin.url
@@ -412,3 +413,58 @@ def check_single_pin(pin_id: int) -> LinkCheck | None:
 
     check.save()
     return check
+
+
+def bulk_recheck_check_ids(check_ids: list[int], user=None) -> dict:
+    """Re-check a list of LinkCheck IDs in order. Returns summary counts."""
+    if not check_ids:
+        return {"total": 0, "success": 0, "failed": 0, "skipped": 0}
+
+    pin_ids = list(
+        LinkCheck.objects.filter(id__in=check_ids)
+        .values_list("pin_id", flat=True)
+        .distinct()
+    )
+
+    total = 0
+    success = 0
+    failed = 0
+    skipped = 0
+
+    for pin_id in pin_ids:
+        if user is not None and not user.is_superuser:
+            pin = Pin.objects.filter(id=pin_id, submitter=user).first()
+            if pin is None:
+                skipped += 1
+                continue
+        result = check_single_pin(pin_id)
+        total += 1
+        if result is None:
+            skipped += 1
+        elif result.status == LinkCheck.Status.SUCCESS:
+            success += 1
+        else:
+            failed += 1
+
+    return {
+        "total": total,
+        "success": success,
+        "failed": failed,
+        "skipped": skipped,
+    }
+
+
+def bulk_recheck_all_failed(user=None) -> dict:
+    """Re-check every failed & unhandled LinkCheck (the "todo list")."""
+    qs = LinkCheck.objects.filter(
+        status=LinkCheck.Status.FAILED,
+        action_status=LinkCheck.ActionStatus.UNHANDLED,
+    ).order_by("-created_at")
+
+    latest_ids = {}
+    for check_id, pin_id in qs.values_list("id", "pin_id"):
+        if pin_id not in latest_ids:
+            latest_ids[pin_id] = check_id
+
+    check_ids = list(latest_ids.values())
+    return bulk_recheck_check_ids(check_ids, user=user)

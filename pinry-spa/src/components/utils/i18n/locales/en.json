@@ -132,6 +132,10 @@
     "errorTypeFilterLabel": "Filter by error type",
     "linkCheckCancelTask": "Stop Scan",
     "linkCheckTaskCancelled": "Cancelled",
+    "linkCheckRecheckAllFailed": "Recheck All Failed",
+    "linkCheckRecheckAllConfirm": "Re-check all broken links now? This may take a while.",
+    "linkCheckRecheckAllSummary": "Rechecked {0}: {1} healthy, {2} still broken, {3} skipped",
+    "linkCheckRecheckAllFailedErr": "Bulk recheck failed, please try again later",
     "loadingMore": "Loading more...",
     "noMoreData": "No more data"
 }

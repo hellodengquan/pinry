@@ -165,6 +165,13 @@ class LinkCheck(models.Model):
     action_note = models.TextField(null=True, blank=True)
     action_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    task = models.ForeignKey(
+        "LinkCheckTask",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="link_checks",
+    )
 
     class Meta:
         ordering = ("-created_at",)
@@ -172,6 +179,7 @@ class LinkCheck(models.Model):
             models.Index(fields=["status", "action_status"]),
             models.Index(fields=["pin", "created_at"]),
             models.Index(fields=["error_type"]),
+            models.Index(fields=["task"]),
         ]
 
     def __str__(self):

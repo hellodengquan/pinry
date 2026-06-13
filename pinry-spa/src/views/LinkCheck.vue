@@ -87,13 +87,29 @@
 
             <!-- Todo Tab -->
             <div v-if="activeTab === 'todo'">
-              <LinkCheckFilterBar
-                v-model="todoErrorType"
-                :options="errorTypeOptions"
-                :total-count="todoStats.total"
-                :type-stats="todoStats.byType"
-                @input="onTodoErrorTypeChange"
-              />
+              <div class="is-flex is-justify-content-space-between is-align-items-center mb-3">
+                <LinkCheckFilterBar
+                  v-model="todoErrorType"
+                  :options="errorTypeOptions"
+                  :total-count="todoStats.total"
+                  :type-stats="todoStats.byType"
+                  @input="onTodoErrorTypeChange"
+                />
+                <div class="ml-4" style="flex-shrink: 0;">
+                  <button
+                    class="button is-info"
+                    :class="{ 'is-loading': recheckingAllFailed }"
+                    :disabled="recheckingAllFailed || todoStats.total === 0"
+                    @click="doRecheckAllFailed"
+                  >
+                    <i class="fa fa-refresh mr-1"></i>
+                    {{ $t("linkCheckRecheckAllFailed") }}
+                    <span v-if="todoStats.total > 0" class="tag is-light ml-1">
+                      {{ todoStats.total }}
+                    </span>
+                  </button>
+                </div>
+              </div>
               <LinkCheckTable
                 :items="todoList"
                 :loading="loadingTodo"
@@ -237,6 +253,7 @@ export default {
       activeTab: 'todo',
       startingTask: false,
       recheckingId: null,
+      recheckingAllFailed: false,
       runningTask: null,
       loadingTodo: false,
       loadingTodoMore: false,
@@ -529,6 +546,32 @@ export default {
         console.error(e);
       } finally {
         this.recheckingId = null;
+      }
+    },
+    async doRecheckAllFailed() {
+      if (this.recheckingAllFailed) return;
+      if (!confirm(this.$t("linkCheckRecheckAllConfirm"))) return;
+      this.recheckingAllFailed = true;
+      try {
+        const resp = await api.LinkCheck.recheckAllFailed();
+        const { total, success, failed, skipped } = resp.data;
+        this.$buefy.toast.open({
+          message: this.$t("linkCheckRecheckAllSummary", [total, success, failed, skipped]),
+          type: 'is-info',
+          duration: 5000,
+        });
+        this.loadTodoList();
+        if (this.activeTab === 'all') {
+          this.loadAllList();
+        }
+      } catch (e) {
+        console.error(e);
+        this.$buefy.toast.open({
+          message: this.$t("linkCheckRecheckAllFailedErr"),
+          type: 'is-danger',
+        });
+      } finally {
+        this.recheckingAllFailed = false;
       }
     },
     async doAction(item, action) {

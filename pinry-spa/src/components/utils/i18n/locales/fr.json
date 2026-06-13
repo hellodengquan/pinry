@@ -132,6 +132,10 @@
     "errorTypeFilterLabel": "Filtrer par type d'erreur",
     "linkCheckCancelTask": "Arrêter",
     "linkCheckTaskCancelled": "Annulé",
+    "linkCheckRecheckAllFailed": "Retout vérifier",
+    "linkCheckRecheckAllConfirm": "Vérifier à nouveau tous les liens cassés ? Cela peut prendre du temps.",
+    "linkCheckRecheckAllSummary": "{0} vérifiés : {1} sains, {2} cassés, {3} ignorés",
+    "linkCheckRecheckAllFailedErr": "Échec de la vérification en lot, réessayez plus tard",
     "loadingMore": "Chargement...",
     "noMoreData": "Plus de données"
 }

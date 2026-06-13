@@ -167,9 +167,16 @@ export default {
     },
   },
   methods: {
-    setLocale(locale) {
+    async setLocale(locale) {
       this.$i18n.locale = locale;
       localStorage.setItem('localeCode', locale);
+      if (this.user.loggedIn) {
+        try {
+          await api.User.setLanguage(locale);
+        } catch (e) {
+          console.error('Failed to persist locale', e);
+        }
+      }
     },
     toggleMenu() {
       this.active = !this.active;
@@ -212,6 +219,10 @@ export default {
           } else {
             self.user.meta = user;
             self.user.loggedIn = true;
+            if (user.language && user.language !== self.$i18n.locale) {
+              self.$i18n.locale = user.language;
+              localStorage.setItem('localeCode', user.language);
+            }
           }
         },
       );

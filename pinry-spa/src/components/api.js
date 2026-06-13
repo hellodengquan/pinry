@@ -270,6 +270,20 @@ const User = {
       },
     );
   },
+  fetchAvailableLanguages() {
+    const url = `${API_PREFIX}profile/users/available-languages/`;
+    return axios.get(url);
+  },
+  setLanguage(code) {
+    const self = this;
+    const url = `${API_PREFIX}profile/users/set-language/`;
+    return new Promise((resolve, reject) => {
+      axios.post(url, { language: code }).then((resp) => {
+        storage.set(self.storageKey, resp.data, 60 * 5 * 1000);
+        resolve(resp.data);
+      }, reject);
+    });
+  },
 };
 
 const Tag = {
@@ -294,6 +308,14 @@ const LinkCheck = {
   },
   recheck(checkId) {
     const url = `${API_PREFIX}link-checks/${checkId}/recheck/`;
+    return axios.post(url);
+  },
+  bulkRecheck(ids) {
+    const url = `${API_PREFIX}link-checks/bulk-recheck/`;
+    return axios.post(url, { ids });
+  },
+  recheckAllFailed() {
+    const url = `${API_PREFIX}link-checks/recheck-all-failed/`;
     return axios.post(url);
   },
 };

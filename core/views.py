@@ -13,7 +13,7 @@ from rest_framework.viewsets import GenericViewSet
 from taggit.models import Tag
 
 from core import serializers as api
-from core.link_checker import check_single_pin
+from core.link_checker import check_single_pin, bulk_recheck_check_ids, bulk_recheck_all_failed
 from core.models import Image, Pin, Board, LinkCheck, LinkCheckTask
 from core.permissions import IsOwnerOrReadOnly, OwnerOnlyIfPrivate
 from core.serializers import (
@@ -196,6 +196,27 @@ class LinkCheckViewSet(viewsets.ReadOnlyModelViewSet):
             )
         return Response(api.LinkCheckSerializer(result).data)
 
+    @action(detail=False, methods=["post"], url_path="bulk-recheck")
+    def bulk_recheck(self, request):
+        check_ids = request.data.get("ids") or request.data.get("check_ids")
+        if not isinstance(check_ids, list) or len(check_ids) == 0:
+            return Response(
+                {"detail": "`ids` must be a non-empty list of LinkCheck ids"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(check_ids) > 5000:
+            return Response(
+                {"detail": "`ids` too large (max 5000 per request)"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        summary = bulk_recheck_check_ids(check_ids, user=request.user)
+        return Response(summary)
+
+    @action(detail=False, methods=["post"], url_path="recheck-all-failed")
+    def recheck_all_failed(self, request):
+        summary = bulk_recheck_all_failed(user=request.user)
+        return Response(summary)
+
 
 class LinkCheckTaskViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = api.LinkCheckTaskSerializer
@@ -232,7 +253,7 @@ class LinkCheckTaskViewSet(viewsets.ReadOnlyModelViewSet):
             thread.start()
 
         return Response(
-            api.LinkCheckTaskSerializer(task).data,
+            api.LinkCheckTaskSerializer(task, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
         )
 
@@ -261,6 +282,7 @@ class LinkCheckTaskViewSet(viewsets.ReadOnlyModelViewSet):
             task.save(update_fields=["status", "completed_at"])
 
             LinkCheck.objects.filter(
+                task_id=task.id,
                 status=LinkCheck.Status.RUNNING,
             ).update(
                 status=LinkCheck.Status.FAILED,
@@ -281,7 +303,8 @@ class LinkCheckTaskViewSet(viewsets.ReadOnlyModelViewSet):
             except Exception:
                 pass
 
-        return Response(api.LinkCheckTaskSerializer(task).data)
+        serializer = api.LinkCheckTaskSerializer(task, context={"request": request})
+        return Response(serializer.data)
 
 
 drf_router = routers.DefaultRouter()
