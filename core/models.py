@@ -120,3 +120,88 @@ def delete_pin_images(sender, instance, **kwargs):
         instance.image.delete()
     except Image.DoesNotExist:
         pass
+
+
+class LinkCheck(models.Model):
+    class Status:
+        PENDING = "pending"
+        RUNNING = "running"
+        SUCCESS = "success"
+        FAILED = "failed"
+        CHOICES = (
+            (PENDING, "待检查"),
+            (RUNNING, "检查中"),
+            (SUCCESS, "正常"),
+            (FAILED, "失效"),
+        )
+
+    class ActionStatus:
+        UNHANDLED = "unhandled"
+        IGNORED = "ignored"
+        FIXED = "fixed"
+        DELETED = "deleted"
+        HANDLED = "handled"
+        CHOICES = (
+            (UNHANDLED, "待处理"),
+            (IGNORED, "已忽略"),
+            (FIXED, "已修复"),
+            (DELETED, "已删除"),
+            (HANDLED, "已处理"),
+        )
+
+    pin = models.ForeignKey(Pin, on_delete=models.CASCADE, related_name="link_checks")
+    url = models.CharField(max_length=2048)
+    status = models.CharField(max_length=16, choices=Status.CHOICES, default=Status.PENDING)
+    http_status_code = models.IntegerField(null=True, blank=True)
+    error_message = models.TextField(null=True, blank=True)
+    response_time_ms = models.IntegerField(null=True, blank=True)
+    checked_at = models.DateTimeField(null=True, blank=True)
+    action_status = models.CharField(
+        max_length=16,
+        choices=ActionStatus.CHOICES,
+        default=ActionStatus.UNHANDLED,
+    )
+    action_note = models.TextField(null=True, blank=True)
+    action_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["status", "action_status"]),
+            models.Index(fields=["pin", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"LinkCheck(pin={self.pin_id}, status={self.status})"
+
+
+class LinkCheckTask(models.Model):
+    class Status:
+        PENDING = "pending"
+        RUNNING = "running"
+        COMPLETED = "completed"
+        FAILED = "failed"
+        CHOICES = (
+            (PENDING, "待执行"),
+            (RUNNING, "执行中"),
+            (COMPLETED, "已完成"),
+            (FAILED, "失败"),
+        )
+
+    submitter = models.ForeignKey(User, on_delete=models.CASCADE)
+    status = models.CharField(max_length=16, choices=Status.CHOICES, default=Status.PENDING)
+    total_pins = models.IntegerField(default=0)
+    checked_count = models.IntegerField(default=0)
+    failed_count = models.IntegerField(default=0)
+    success_count = models.IntegerField(default=0)
+    error_message = models.TextField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+
+    def __str__(self):
+        return f"LinkCheckTask(id={self.id}, status={self.status})"

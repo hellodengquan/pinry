@@ -9,6 +9,7 @@ import Boards4User from '../views/Boards4User.vue';
 import Profile4User from '../views/Profile4User.vue';
 import PinCreate from '../views/PinCreate.vue';
 import Search from '../views/Search.vue';
+import LinkCheck from '../views/LinkCheck.vue';
 import PageNotFound from '../views/PageNotFound.vue';
 
 Vue.use(VueRouter);
@@ -18,6 +19,11 @@ const routes = [
     path: '/',
     name: 'home',
     component: Home,
+  },
+  {
+    path: '/link-check',
+    name: 'link-check',
+    component: LinkCheck,
   },
   {
     path: '/pins/tags/:tag',

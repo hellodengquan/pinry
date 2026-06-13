@@ -5,7 +5,7 @@ from rest_framework.exceptions import ValidationError
 from taggit.models import Tag
 
 from core.models import Image, Board
-from core.models import Pin
+from core.models import LinkCheck, LinkCheckTask, Pin
 from django_images.models import Thumbnail
 from users.serializers import UserSerializer
 from users.models import User
@@ -273,3 +273,100 @@ class TagAutoCompleteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Tag
         fields = ('name', )
+
+
+class PinSummarySerializer(serializers.ModelSerializer):
+    image = ImageSerializer(read_only=True)
+
+    class Meta:
+        model = Pin
+        fields = ("id", "url", "description", "image", "private", "published")
+
+
+class LinkCheckSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LinkCheck
+        fields = (
+            "id",
+            "pin",
+            "pin_detail",
+            "url",
+            "status",
+            "status_display",
+            "http_status_code",
+            "error_message",
+            "response_time_ms",
+            "checked_at",
+            "action_status",
+            "action_status_display",
+            "action_note",
+            "action_at",
+            "created_at",
+        )
+        read_only_fields = (
+            "id",
+            "pin",
+            "url",
+            "status",
+            "http_status_code",
+            "error_message",
+            "response_time_ms",
+            "checked_at",
+            "created_at",
+        )
+
+    pin = serializers.PrimaryKeyRelatedField(read_only=True)
+    pin_detail = PinSummarySerializer(source="pin", read_only=True)
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
+    action_status_display = serializers.CharField(
+        source="get_action_status_display", read_only=True
+    )
+
+
+class LinkCheckActionSerializer(serializers.Serializer):
+    action = serializers.ChoiceField(
+        choices=["ignore", "fixed", "handled", "delete"]
+    )
+    action_note = serializers.CharField(required=False, allow_blank=True, max_length=2048)
+
+
+class LinkCheckTaskSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LinkCheckTask
+        fields = (
+            "id",
+            "submitter",
+            "status",
+            "status_display",
+            "total_pins",
+            "checked_count",
+            "failed_count",
+            "success_count",
+            "error_message",
+            "started_at",
+            "completed_at",
+            "created_at",
+            "progress_percent",
+        )
+        read_only_fields = (
+            "id",
+            "submitter",
+            "status",
+            "total_pins",
+            "checked_count",
+            "failed_count",
+            "success_count",
+            "error_message",
+            "started_at",
+            "completed_at",
+            "created_at",
+        )
+
+    submitter = UserSerializer(read_only=True)
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
+    progress_percent = serializers.SerializerMethodField()
+
+    def get_progress_percent(self, obj: LinkCheckTask) -> float:
+        if obj.total_pins == 0:
+            return 0.0
+        return round((obj.checked_count / obj.total_pins) * 100, 2)

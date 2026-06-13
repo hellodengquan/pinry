@@ -279,10 +279,42 @@ const Tag = {
   },
 };
 
+const LinkCheck = {
+  fetchList(params = {}) {
+    const url = `${API_PREFIX}link-checks/`;
+    return axios.get(url, { params });
+  },
+  performAction(checkId, action, actionNote = '') {
+    const url = `${API_PREFIX}link-checks/${checkId}/action/`;
+    return axios.post(url, { action, action_note: actionNote });
+  },
+  recheck(checkId) {
+    const url = `${API_PREFIX}link-checks/${checkId}/recheck/`;
+    return axios.post(url);
+  },
+};
+
+const LinkCheckTask = {
+  fetchList(params = {}) {
+    const url = `${API_PREFIX}link-check-tasks/`;
+    return axios.get(url, { params });
+  },
+  start() {
+    const url = `${API_PREFIX}link-check-tasks/start/`;
+    return axios.post(url);
+  },
+  get(taskId) {
+    const url = `${API_PREFIX}link-check-tasks/${taskId}/`;
+    return axios.get(url);
+  },
+};
+
 export default {
   Tag,
   Pin,
   Board,
+  LinkCheck,
+  LinkCheckTask,
   fetchPin,
   fetchPins,
   fetchBoardForUser,

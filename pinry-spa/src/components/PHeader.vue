@@ -61,6 +61,13 @@
                   class="navbar-item">
                   {{ $t("profileLink") }}
                 </router-link>
+                <hr class="navbar-divider">
+                <router-link
+                  :to="{ name: 'link-check' }"
+                  class="navbar-item">
+                  <b-icon icon="link-off" custom-size="mdi-18px"></b-icon>
+                  <span class="ml-2">{{ $t("linkCheckLink") }}</span>
+                </router-link>
               </div>
             </div>
             <div class="navbar-item has-dropdown is-hoverable">
