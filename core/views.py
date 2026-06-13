@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.db.models import Subquery, OuterRef, Count
 from django.utils import timezone
 from django.utils.decorators import method_decorator
@@ -237,22 +238,36 @@ class LinkCheckTaskViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="cancel")
     def cancel_task(self, request, pk=None):
-        task = self.get_object()
-        if not request.user.is_superuser and task.submitter != request.user:
-            return Response(
-                {"detail": "permission denied"},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        with transaction.atomic():
+            task = LinkCheckTask.objects.select_for_update().get(pk=pk)
 
-        if task.status not in (LinkCheckTask.Status.PENDING, LinkCheckTask.Status.RUNNING):
-            return Response(
-                {"detail": "task cannot be cancelled in current status"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            if not request.user.is_superuser and task.submitter != request.user:
+                return Response(
+                    {"detail": "permission denied"},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
 
-        task.status = LinkCheckTask.Status.CANCELLED
-        task.completed_at = timezone.now()
-        task.save(update_fields=["status", "completed_at"])
+            if task.status not in (
+                LinkCheckTask.Status.PENDING,
+                LinkCheckTask.Status.RUNNING,
+            ):
+                return Response(
+                    {"detail": "task cannot be cancelled in current status"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            task.status = LinkCheckTask.Status.CANCELLED
+            task.completed_at = timezone.now()
+            task.save(update_fields=["status", "completed_at"])
+
+            LinkCheck.objects.filter(
+                status=LinkCheck.Status.RUNNING,
+            ).update(
+                status=LinkCheck.Status.FAILED,
+                error_type="cancelled",
+                error_message="Task cancelled by user",
+                checked_at=timezone.now(),
+            )
 
         if CELERY_AVAILABLE and task.celery_task_id:
             try:

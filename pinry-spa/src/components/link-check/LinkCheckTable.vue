@@ -1,6 +1,6 @@
 <template>
-  <div>
-    <div v-if="loading" class="has-text-centered py-6">
+  <div ref="scrollContainer">
+    <div v-if="loading && items.length === 0" class="has-text-centered py-6">
       <i class="fa fa-spinner fa-spin is-size-3"></i>
     </div>
     <div v-else-if="items.length === 0" class="notification is-success is-light has-text-centered py-6">
@@ -116,6 +116,19 @@
           </div>
         </div>
       </div>
+
+      <div ref="sentinel" class="scroll-sentinel"></div>
+
+      <div v-if="loadingMore" class="has-text-centered py-4">
+        <i class="fa fa-spinner fa-spin mr-2"></i>
+        <span class="is-size-7 has-text-grey">{{ $t("loadingMore") }}</span>
+      </div>
+
+      <div v-if="!hasMore && items.length > 0" class="has-text-centered py-3">
+        <span class="is-size-7 has-text-grey-light">
+          {{ $t("noMoreData") }}
+        </span>
+      </div>
     </div>
   </div>
 </template>
@@ -126,12 +139,50 @@ export default {
   props: {
     items: { type: Array, required: true },
     loading: { type: Boolean, default: false },
+    loadingMore: { type: Boolean, default: false },
+    hasMore: { type: Boolean, default: true },
     emptyText: { type: String, default: '' },
     prefix: { type: String, default: 'item-' },
     recheckingId: { type: Number, default: null },
     showAllActions: { type: Boolean, default: false },
   },
+  data() {
+    return {
+      observer: null,
+    };
+  },
+  mounted() {
+    this.setupObserver();
+  },
+  beforeDestroy() {
+    if (this.observer) {
+      this.observer.disconnect();
+      this.observer = null;
+    }
+  },
+  watch: {
+    hasMore() {
+      this.$nextTick(() => {
+        this.setupObserver();
+      });
+    },
+  },
   methods: {
+    setupObserver() {
+      if (this.observer) {
+        this.observer.disconnect();
+      }
+      if (!this.$refs.sentinel) return;
+      this.observer = new IntersectionObserver(
+        (entries) => {
+          if (entries[0].isIntersecting && this.hasMore && !this.loadingMore) {
+            this.$emit('load-more');
+          }
+        },
+        { rootMargin: '200px' },
+      );
+      this.observer.observe(this.$refs.sentinel);
+    },
     showActions(item) {
       if (this.showAllActions) {
         return item.status === 'failed' && item.action_status === 'unhandled';
@@ -193,6 +244,7 @@ export default {
         http_4xx: this.$t("errorTypeHttp4xx"),
         http_5xx: this.$t("errorTypeHttp5xx"),
         unknown: this.$t("errorTypeUnknown"),
+        cancelled: this.$t("errorTypeUnknown"),
       };
       return map[t] || t;
     },
@@ -207,6 +259,7 @@ export default {
         http_4xx: 'is-warning is-light',
         http_5xx: 'is-danger is-light',
         unknown: 'is-light',
+        cancelled: 'is-dark is-light',
       };
       return map[t] || 'is-light';
     },
@@ -224,5 +277,8 @@ export default {
 }
 .break-all {
   word-break: break-all;
+}
+.scroll-sentinel {
+  height: 1px;
 }
 </style>

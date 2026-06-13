@@ -131,5 +131,7 @@
     "errorTypeUnknown": "Unknown Error",
     "errorTypeFilterLabel": "Filter by error type",
     "linkCheckCancelTask": "Stop Scan",
-    "linkCheckTaskCancelled": "Cancelled"
+    "linkCheckTaskCancelled": "Cancelled",
+    "loadingMore": "Loading more...",
+    "noMoreData": "No more data"
 }

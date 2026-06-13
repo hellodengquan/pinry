@@ -131,5 +131,7 @@
   "errorTypeUnknown": "未知错误",
   "errorTypeFilterLabel": "按错误类型筛选",
   "linkCheckCancelTask": "停止巡检",
-  "linkCheckTaskCancelled": "已取消"
+  "linkCheckTaskCancelled": "已取消",
+  "loadingMore": "加载更多...",
+  "noMoreData": "没有更多数据"
 }

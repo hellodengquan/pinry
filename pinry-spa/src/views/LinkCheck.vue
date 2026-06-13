@@ -97,18 +97,15 @@
               <LinkCheckTable
                 :items="todoList"
                 :loading="loadingTodo"
+                :loading-more="loadingTodoMore"
+                :has-more="todoHasMore"
                 :rechecking-id="recheckingId"
                 prefix="todo-"
                 @open-source="openSource"
                 @recheck="doRecheck"
                 @action="doAction"
                 @confirm-delete="confirmDelete"
-              />
-              <LinkCheckPagination
-                :total-count="todoStats.total"
-                :current-page="todoPage"
-                :page-size="pageSize"
-                @page-change="onTodoPageChange"
+                @load-more="loadTodoMore"
               />
             </div>
 
@@ -186,13 +183,15 @@
               <LinkCheckFilterBar
                 v-model="allErrorType"
                 :options="errorTypeOptions"
-                :total-count="0"
+                :total-count="allTotal"
                 :type-stats="[]"
                 @input="onAllErrorTypeChange"
               />
               <LinkCheckTable
                 :items="allList"
                 :loading="loadingAll"
+                :loading-more="loadingAllMore"
+                :has-more="allHasMore"
                 :rechecking-id="recheckingId"
                 prefix="all-"
                 :show-all-actions="true"
@@ -201,12 +200,7 @@
                 @recheck="doRecheck"
                 @action="doAction"
                 @confirm-delete="confirmDelete"
-              />
-              <LinkCheckPagination
-                :total-count="allTotal"
-                :current-page="allPage"
-                :page-size="pageSize"
-                @page-change="onAllPageChange"
+                @load-more="loadAllMore"
               />
             </div>
 
@@ -221,7 +215,6 @@
 import PHeader from '../components/PHeader.vue';
 import LinkCheckFilterBar from '../components/link-check/LinkCheckFilterBar.vue';
 import LinkCheckTable from '../components/link-check/LinkCheckTable.vue';
-import LinkCheckPagination from '../components/link-check/LinkCheckPagination.vue';
 import api from '../components/api';
 
 const ERROR_TYPE_OPTIONS = [
@@ -246,27 +239,30 @@ export default {
       recheckingId: null,
       runningTask: null,
       loadingTodo: false,
+      loadingTodoMore: false,
       loadingTasks: false,
       loadingAll: false,
+      loadingAllMore: false,
       todoList: [],
       todoStats: { total: 0, byType: [] },
+      todoHasMore: true,
+      todoOffset: 0,
       taskList: [],
       allList: [],
       allTotal: 0,
+      allHasMore: true,
+      allOffset: 0,
       pollTimer: null,
       todoErrorType: '',
       allErrorType: '',
       errorTypeOptions: ERROR_TYPE_OPTIONS,
       pageSize: 20,
-      todoPage: 1,
-      allPage: 1,
     };
   },
   components: {
     PHeader,
     LinkCheckFilterBar,
     LinkCheckTable,
-    LinkCheckPagination,
   },
   beforeMount() {
     this.initializeUser();
@@ -304,13 +300,15 @@ export default {
     // ---- Todo ----
     async loadTodoList() {
       this.loadingTodo = true;
+      this.todoOffset = 0;
+      this.todoHasMore = true;
       try {
         const params = {
           status: 'failed',
           action_status: 'unhandled',
           latest: true,
           limit: this.pageSize,
-          offset: (this.todoPage - 1) * this.pageSize,
+          offset: 0,
         };
         if (this.todoErrorType) {
           params.error_type = this.todoErrorType;
@@ -318,11 +316,38 @@ export default {
         const resp = await api.LinkCheck.fetchList(params);
         this.todoList = resp.data.results || [];
         this.todoStats.total = resp.data.count || 0;
+        this.todoOffset = this.todoList.length;
+        this.todoHasMore = this.todoList.length < (resp.data.count || 0);
         this.loadTodoStats();
       } catch (e) {
         console.error('Failed to load todo list', e);
       } finally {
         this.loadingTodo = false;
+      }
+    },
+    async loadTodoMore() {
+      if (this.loadingTodoMore || !this.todoHasMore) return;
+      this.loadingTodoMore = true;
+      try {
+        const params = {
+          status: 'failed',
+          action_status: 'unhandled',
+          latest: true,
+          limit: this.pageSize,
+          offset: this.todoOffset,
+        };
+        if (this.todoErrorType) {
+          params.error_type = this.todoErrorType;
+        }
+        const resp = await api.LinkCheck.fetchList(params);
+        const newItems = resp.data.results || [];
+        this.todoList = this.todoList.concat(newItems);
+        this.todoOffset = this.todoList.length;
+        this.todoHasMore = this.todoList.length < (resp.data.count || 0);
+      } catch (e) {
+        console.error('Failed to load more todo items', e);
+      } finally {
+        this.loadingTodoMore = false;
       }
     },
     async loadTodoStats() {
@@ -337,11 +362,6 @@ export default {
       }
     },
     onTodoErrorTypeChange() {
-      this.todoPage = 1;
-      this.loadTodoList();
-    },
-    onTodoPageChange(page) {
-      this.todoPage = page;
       this.loadTodoList();
     },
 
@@ -361,11 +381,13 @@ export default {
     // ---- All Checks ----
     async loadAllList() {
       this.loadingAll = true;
+      this.allOffset = 0;
+      this.allHasMore = true;
       try {
         const params = {
           latest: true,
           limit: this.pageSize,
-          offset: (this.allPage - 1) * this.pageSize,
+          offset: 0,
         };
         if (this.allErrorType) {
           params.error_type = this.allErrorType;
@@ -373,18 +395,38 @@ export default {
         const resp = await api.LinkCheck.fetchList(params);
         this.allList = resp.data.results || [];
         this.allTotal = resp.data.count || 0;
+        this.allOffset = this.allList.length;
+        this.allHasMore = this.allList.length < (resp.data.count || 0);
       } catch (e) {
         console.error('Failed to load all list', e);
       } finally {
         this.loadingAll = false;
       }
     },
-    onAllErrorTypeChange() {
-      this.allPage = 1;
-      this.loadAllList();
+    async loadAllMore() {
+      if (this.loadingAllMore || !this.allHasMore) return;
+      this.loadingAllMore = true;
+      try {
+        const params = {
+          latest: true,
+          limit: this.pageSize,
+          offset: this.allOffset,
+        };
+        if (this.allErrorType) {
+          params.error_type = this.allErrorType;
+        }
+        const resp = await api.LinkCheck.fetchList(params);
+        const newItems = resp.data.results || [];
+        this.allList = this.allList.concat(newItems);
+        this.allOffset = this.allList.length;
+        this.allHasMore = this.allList.length < (resp.data.count || 0);
+      } catch (e) {
+        console.error('Failed to load more items', e);
+      } finally {
+        this.loadingAllMore = false;
+      }
     },
-    onAllPageChange(page) {
-      this.allPage = page;
+    onAllErrorTypeChange() {
       this.loadAllList();
     },
 

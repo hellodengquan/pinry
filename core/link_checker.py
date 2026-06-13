@@ -239,9 +239,25 @@ def get_pins_to_check(user=None, only_mine=True):
 
 @transaction.atomic
 def create_link_check_records(pins, task: LinkCheckTask | None = None):
-    records = []
+    pin_ids = []
     for pin in pins:
         if not is_valid_url(pin.url):
+            continue
+        pin_ids.append(pin.id if hasattr(pin, "pk") and pin.pk else pin.id)
+
+    existing = set(
+        LinkCheck.objects.filter(
+            pin_id__in=pin_ids,
+            status=LinkCheck.Status.PENDING,
+        ).values_list("pin_id", flat=True)
+    )
+
+    records = []
+    url_map = {}
+    for pin in pins:
+        if not is_valid_url(pin.url):
+            continue
+        if pin.id in existing:
             continue
         records.append(
             LinkCheck(
@@ -251,11 +267,21 @@ def create_link_check_records(pins, task: LinkCheckTask | None = None):
                 action_status=LinkCheck.ActionStatus.UNHANDLED,
             )
         )
+        url_map[pin.id] = pin.url
+
     created = LinkCheck.objects.bulk_create(records, batch_size=500)
+
     if task is not None:
         task.total_pins = len(created)
         task.save(update_fields=["total_pins"])
-    return created
+
+    check_ids = list(
+        LinkCheck.objects.filter(
+            pin_id__in=pin_ids,
+            status=LinkCheck.Status.PENDING,
+        ).values_list("id", flat=True)
+    )
+    return LinkCheck.objects.filter(id__in=check_ids).select_related("pin")
 
 
 def run_link_check_task(task_id: int):
