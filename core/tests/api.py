@@ -1,6 +1,7 @@
 import json
 
 from django.urls import reverse
+from django.test import override_settings
 import mock
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -705,3 +706,240 @@ class BoardBulkArchiveTests(APITestCase):
         self.assertTrue(self.b1.is_archived)
         self.assertEqual(self.b1.pins.count(), 1)
         self.assertTrue(self.b1.pins.filter(id=pin.id).exists())
+
+
+class BoardBulkArchiveSettingsTests(APITestCase):
+    def setUp(self):
+        self.owner = create_user("owner")
+        self.boards = []
+        for i in range(10):
+            b = Board.objects.create(
+                submitter=self.owner,
+                name=f"board-{i}",
+            )
+            self.boards.append(b)
+        self.bulk_archive_url = reverse("board-bulk-archive")
+
+    def test_default_max_size_is_100(self):
+        from django.conf import settings
+        self.assertEqual(settings.PINRY_BULK_ARCHIVE_MAX, 100)
+
+    @override_settings(PINRY_BULK_ARCHIVE_MAX=5)
+    def test_custom_max_size_5_rejects_6(self):
+        self.client.login(username=self.owner.username, password="password")
+        ids = [b.id for b in self.boards[:6]]
+        resp = self.client.post(
+            self.bulk_archive_url,
+            data={"board_ids": ids},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 413)
+        self.assertEqual(resp.json()["max_size"], 5)
+        self.assertEqual(resp.json()["requested"], 6)
+
+    @override_settings(PINRY_BULK_ARCHIVE_MAX=5)
+    def test_custom_max_size_5_accepts_5(self):
+        self.client.login(username=self.owner.username, password="password")
+        ids = [b.id for b in self.boards[:5]]
+        resp = self.client.post(
+            self.bulk_archive_url,
+            data={"board_ids": ids},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["updated_count"], 5)
+
+    @override_settings(PINRY_BULK_ARCHIVE_MAX=3)
+    def test_custom_max_size_also_applies_to_serializer(self):
+        self.client.login(username=self.owner.username, password="password")
+        ids = [b.id for b in self.boards[:4]]
+        resp = self.client.post(
+            self.bulk_archive_url,
+            data={"board_ids": ids},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 413)
+
+    @override_settings(PINRY_BULK_ARCHIVE_MAX=200)
+    def test_custom_max_size_200_allows_101(self):
+        self.client.login(username=self.owner.username, password="password")
+        ids = list(range(1, 102))
+        resp = self.client.post(
+            self.bulk_archive_url,
+            data={"board_ids": ids},
+            format="json",
+        )
+        self.assertNotEqual(resp.status_code, 413)
+
+
+class BoardArchiveCursorStressTests(APITestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.owner = create_user("stress_owner")
+        cls.num_boards = 200
+        cls.boards = []
+        for i in range(cls.num_boards):
+            b = Board.objects.create(
+                submitter=cls.owner,
+                name=f"stress-board-{i:03d}",
+            )
+            cls.boards.append(b)
+
+    def setUp(self):
+        self.archived_list_url = reverse("archived-board-list")
+        Board.objects.filter(submitter=self.owner).update(
+            is_archived=False, archived_at=None,
+        )
+
+    def _bulk_archive(self, board_ids):
+        self.client.login(username=self.owner.username, password="password")
+        resp = self.client.post(
+            reverse("board-bulk-archive"),
+            data={"board_ids": board_ids},
+            format="json",
+        )
+        return resp
+
+    def _bulk_unarchive(self, board_ids):
+        self.client.login(username=self.owner.username, password="password")
+        resp = self.client.post(
+            reverse("board-bulk-unarchive"),
+            data={"board_ids": board_ids},
+            format="json",
+        )
+        return resp
+
+    def _collect_all_archived_ids(self):
+        ids = []
+        self.client.login(username=self.owner.username, password="password")
+        cursor = None
+        while True:
+            params = {"submitter__username": self.owner.username}
+            if cursor:
+                params["cursor"] = cursor
+            resp = self.client.get(self.archived_list_url, params)
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            ids.extend([item["id"] for item in data["results"]])
+            if not data["next"]:
+                break
+            from urllib.parse import urlparse, parse_qs
+            parsed = urlparse(data["next"])
+            cursor_list = parse_qs(parsed.query).get("cursor", [])
+            cursor = cursor_list[0] if cursor_list else None
+        return ids
+
+    def test_200_boards_cursor_pagination_no_duplicates_no_missing(self):
+        board_ids = [b.id for b in self.boards]
+        resp = self._bulk_archive(board_ids)
+        self.assertEqual(resp.status_code, 413)
+        self.assertEqual(
+            resp.json()["detail"],
+            "Too many boards requested. Maximum allowed is 100",
+        )
+
+    def test_cursor_pagination_through_200_boards_in_batches_of_100(self):
+        board_ids = [b.id for b in self.boards]
+        for start in range(0, len(board_ids), 100):
+            chunk = board_ids[start:start + 100]
+            resp = self._bulk_archive(chunk)
+            self.assertEqual(resp.status_code, 200)
+        collected = self._collect_all_archived_ids()
+        self.assertEqual(len(collected), 200)
+        self.assertEqual(len(set(collected)), 200)
+
+    def test_cursor_pagination_stable_after_interleaved_bulk_operations(self):
+        board_ids = [b.id for b in self.boards]
+        for start in range(0, 150, 100):
+            chunk = board_ids[start:start + 100]
+            resp = self._bulk_archive(chunk)
+            self.assertEqual(resp.status_code, 200)
+
+        self.client.login(username=self.owner.username, password="password")
+        resp = self.client.get(
+            self.archived_list_url,
+            {"submitter__username": self.owner.username, "page_size": 20},
+        )
+        self.assertEqual(resp.status_code, 200)
+        first_page_ids = [item["id"] for item in resp.json()["results"]]
+        self.assertEqual(len(first_page_ids), 20)
+        next_cursor_url = resp.json()["next"]
+        self.assertIsNotNone(next_cursor_url)
+
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(next_cursor_url)
+        cursor = parse_qs(parsed.query).get("cursor", [None])[0]
+
+        newly_added_ids = board_ids[150:200]
+        resp = self._bulk_archive(newly_added_ids)
+        self.assertEqual(resp.status_code, 200)
+
+        second_page = self.client.get(
+            self.archived_list_url,
+            {
+                "submitter__username": self.owner.username,
+                "page_size": 20,
+                "cursor": cursor,
+            },
+        )
+        self.assertEqual(second_page.status_code, 200)
+        second_page_ids = [item["id"] for item in second_page.json()["results"]]
+        self.assertEqual(len(second_page_ids), 20)
+        for bid in first_page_ids:
+            self.assertNotIn(bid, second_page_ids)
+
+    def test_many_round_trips_bulk_archive_unarchive_consistency(self):
+        first_half = [b.id for b in self.boards[:100]]
+        second_half = [b.id for b in self.boards[100:]]
+
+        for _ in range(5):
+            resp = self._bulk_archive(first_half)
+            self.assertEqual(resp.status_code, 200)
+            resp = self._bulk_archive(second_half)
+            self.assertEqual(resp.status_code, 200)
+            archived = self._collect_all_archived_ids()
+            self.assertEqual(len(archived), 200)
+
+            resp = self._bulk_unarchive(first_half)
+            self.assertEqual(resp.status_code, 200)
+            archived = self._collect_all_archived_ids()
+            self.assertEqual(len(archived), 100)
+            for bid in second_half:
+                self.assertIn(bid, archived)
+
+            resp = self._bulk_unarchive(second_half)
+            self.assertEqual(resp.status_code, 200)
+            archived = self._collect_all_archived_ids()
+            self.assertEqual(len(archived), 0)
+
+    def test_cursor_pagination_10_page_trip_no_duplicates(self):
+        board_ids = [b.id for b in self.boards]
+        for start in range(0, len(board_ids), 100):
+            chunk = board_ids[start:start + 100]
+            resp = self._bulk_archive(chunk)
+            self.assertEqual(resp.status_code, 200)
+
+        self.client.login(username=self.owner.username, password="password")
+        all_ids = []
+        cursor = None
+        page_count = 0
+        while True:
+            params = {"submitter__username": self.owner.username, "page_size": 20}
+            if cursor:
+                params["cursor"] = cursor
+            resp = self.client.get(self.archived_list_url, params)
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            page_count += 1
+            ids = [item["id"] for item in data["results"]]
+            all_ids.extend(ids)
+            if not data["next"]:
+                break
+            from urllib.parse import urlparse, parse_qs
+            parsed = urlparse(data["next"])
+            cursor_list = parse_qs(parsed.query).get("cursor", [])
+            cursor = cursor_list[0] if cursor_list else None
+
+        self.assertEqual(page_count, 10)
+        self.assertEqual(len(all_ids), 200)
+        self.assertEqual(len(set(all_ids)), 200)

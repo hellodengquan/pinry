@@ -133,6 +133,9 @@ MESSAGE_TAGS = {
 
 API_LIMIT_PER_PAGE = 50
 
+# Bulk archive / unarchive maximum number of boards per request
+PINRY_BULK_ARCHIVE_MAX = 100
+
 IMAGE_PATH = 'core.utils.upload_path'
 
 IMAGE_SIZES = {

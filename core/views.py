@@ -1,6 +1,7 @@
 from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_page
+from django.conf import settings
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import viewsets, mixins, routers
 from rest_framework.decorators import action
@@ -19,6 +20,8 @@ from core.serializers import filter_private_pin, filter_private_board
 class ArchivedBoardCursorPagination(CursorPagination):
     ordering = ('-archived_at', '-id')
     page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 200
     cursor_query_param = 'cursor'
 
 
@@ -91,7 +94,7 @@ class BoardViewSet(viewsets.ModelViewSet):
                 status=401,
             )
         raw_ids = request.data.get("board_ids", []) if isinstance(request.data, dict) else []
-        max_size = api.BoardBulkArchiveSerializer.MAX_BULK_SIZE
+        max_size = getattr(settings, "PINRY_BULK_ARCHIVE_MAX", 100)
         if isinstance(raw_ids, list) and len(raw_ids) > max_size:
             return Response(
                 {

@@ -280,10 +280,16 @@ class TagAutoCompleteSerializer(serializers.ModelSerializer):
 
 
 class BoardBulkArchiveSerializer(serializers.Serializer):
-    MAX_BULK_SIZE = 100
-
     board_ids = serializers.ListField(
         child=serializers.IntegerField(min_value=1),
         allow_empty=False,
-        max_length=MAX_BULK_SIZE,
     )
+
+    def validate_board_ids(self, value):
+        from django.conf import settings
+        max_size = getattr(settings, "PINRY_BULK_ARCHIVE_MAX", 100)
+        if len(value) > max_size:
+            raise serializers.ValidationError(
+                f"Ensure this list has at most {max_size} items (it has {len(value)})."
+            )
+        return value
