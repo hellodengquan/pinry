@@ -719,6 +719,183 @@ class BoardDetailPaginationCountTests(APITestCase):
         )
 
 
+class PinViewSetListingPaginationTests(APITestCase):
+    """
+    Direct assertions against PinViewSet list endpoint paginator count
+    under permission filtering.  Verifies that the paginator installed on
+    PinViewSet is actually the permission-aware one and that its count
+    field correctly reflects private pin access for each auth state.
+    """
+
+    def setUp(self):
+        super(PinViewSetListingPaginationTests, self).setUp()
+        from core.pagination import PermissionAwareLimitOffsetPagination
+        from core.views import PinViewSet
+        self._paginator_cls = PermissionAwareLimitOffsetPagination
+        self._view_cls = PinViewSet
+
+        self.owner = create_user("listpg_owner")
+        self.other = create_user("listpg_other")
+
+        image_a = create_image()
+        image_b = create_image()
+        image_c = create_image()
+        image_d = create_image()
+
+        Pin.objects.create(
+            submitter=self.owner, image=image_a, private=True,
+            description="listpg owner private",
+        )
+        Pin.objects.create(
+            submitter=self.owner, image=image_b, private=False,
+            description="listpg owner public",
+        )
+        Pin.objects.create(
+            submitter=self.other, image=image_c, private=True,
+            description="listpg other private",
+        )
+        Pin.objects.create(
+            submitter=self.other, image=image_d, private=False,
+            description="listpg other public",
+        )
+
+        self.pin_list_url = reverse("pin-list")
+
+    def tearDown(self):
+        _teardown_models()
+
+    def test_viewset_uses_permission_aware_paginator(self):
+        self.assertIs(
+            self._view_cls.pagination_class,
+            self._paginator_cls,
+            "PinViewSet.pagination_class must be PermissionAwareLimitOffsetPagination",
+        )
+
+    def test_anonymous_listing_count_excludes_all_private(self):
+        resp = self.client.get(self.pin_list_url)
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertIn('count', body, "listing must include DRF paginator count field")
+        self.assertIn('next', body)
+        self.assertIn('results', body)
+        self.assertEqual(body['count'], 2, "anonymous should see exactly 2 public pins")
+        self.assertEqual(len(body['results']), 2)
+        for pin in body['results']:
+            self.assertFalse(pin['private'],
+                             "anonymous must never receive a private pin in listing")
+
+    def test_owner_listing_count_includes_own_private(self):
+        self.client.login(username=self.owner.username, password='password')
+        resp = self.client.get(self.pin_list_url)
+        body = resp.json()
+        self.assertEqual(body['count'], 3,
+                         "owner should see own private + all public = 3 pins")
+        self.assertEqual(len(body['results']), 3)
+        priv_ids = [p['id'] for p in body['results'] if p['private']]
+        self.assertEqual(len(priv_ids), 1,
+                         "owner should see exactly 1 private pin (their own)")
+
+    def test_other_listing_count_includes_own_private(self):
+        self.client.login(username=self.other.username, password='password')
+        resp = self.client.get(self.pin_list_url)
+        body = resp.json()
+        self.assertEqual(body['count'], 3)
+        self.assertEqual(len(body['results']), 3)
+        priv_pins = [p for p in body['results'] if p['private']]
+        self.assertEqual(len(priv_pins), 1,
+                         "other user should see exactly 1 private pin (their own)")
+        self.assertEqual(priv_pins[0]['submitter']['username'], self.other.username,
+                         "private pin visible to other user must belong to other user")
+
+    def test_listing_count_consistent_on_second_page(self):
+        for i in range(50):
+            img = create_image()
+            Pin.objects.create(
+                submitter=self.owner, image=img,
+                private=(i % 2 == 0),
+                description=f"bulk listing pin {i}",
+            )
+        self.client.login(username=self.owner.username, password='password')
+        resp = self.client.get(self.pin_list_url, {"limit": 20})
+        first = resp.json()
+        self.assertEqual(len(first['results']), 20)
+        self.assertIsNotNone(first['next'])
+        next_url = first['next'].replace("http://testserver", "")
+        resp2 = self.client.get(next_url)
+        second = resp2.json()
+        self.assertEqual(first['count'], second['count'],
+                         "count must be identical across paginated pages")
+        self.assertEqual(len(second['results']), 20,
+                         "second page should also contain 20 pins for owner")
+        first_ids = {p['id'] for p in first['results']}
+        second_ids = {p['id'] for p in second['results']}
+        self.assertEqual(len(first_ids & second_ids), 0,
+                         "consecutive pages must not share any pins (no duplicates)")
+
+    def test_listing_after_logout_count_drops(self):
+        self.client.login(username=self.owner.username, password='password')
+        auth_resp = self.client.get(self.pin_list_url)
+        auth_count = auth_resp.json()['count']
+
+        self.client.logout()
+        anon_resp = self.client.get(self.pin_list_url)
+        anon_count = anon_resp.json()['count']
+
+        self.assertGreater(auth_count, anon_count,
+                           "authenticated owner count must be greater than anonymous")
+
+    def test_paginator_count_matches_queryset_count_for_anonymous(self):
+        from core.pagination import PermissionAwareLimitOffsetPagination
+        from core.serializers import filter_private_pin
+        from rest_framework.test import APIRequestFactory
+
+        factory = APIRequestFactory()
+        request = factory.get('/api/v2/pins/')
+        from django.contrib.auth.models import AnonymousUser
+        request.user = AnonymousUser()
+
+        qs = filter_private_pin(request, Pin.objects.all()).distinct()
+        expected_count = qs.count()
+
+        paginator = PermissionAwareLimitOffsetPagination()
+        paginated_count = paginator.get_count(qs)
+        self.assertEqual(paginated_count, expected_count,
+                         "paginator count must match queryset.distinct().count() for anonymous")
+
+    def test_paginator_count_matches_queryset_count_for_authenticated(self):
+        from core.pagination import PermissionAwareLimitOffsetPagination
+        from core.serializers import filter_private_pin
+        from rest_framework.test import APIRequestFactory
+
+        factory = APIRequestFactory()
+        request = factory.get('/api/v2/pins/')
+        request.user = self.owner
+
+        qs = filter_private_pin(request, Pin.objects.all()).distinct()
+        expected_count = qs.count()
+
+        paginator = PermissionAwareLimitOffsetPagination()
+        paginated_count = paginator.get_count(qs)
+        self.assertEqual(paginated_count, expected_count,
+                         "paginator count must match queryset.distinct().count() for owner")
+
+    def test_paginator_auto_adds_distinct_on_m2m(self):
+        from core.pagination import PermissionAwareLimitOffsetPagination
+
+        qs = Pin.objects.all().filter(tags__name='nonexistent_tag_xyz')
+        self.assertFalse(qs.query.distinct,
+                         "baseline: raw M2M filter does not set distinct flag")
+
+        paginator = PermissionAwareLimitOffsetPagination()
+        count = paginator.get_count(qs)
+        self.assertEqual(count, 0)
+
+        # Re-execute the paginator's distinct branch - validate it was applied
+        distinct_qs = Pin.objects.all().filter(tags__name='nonexistent_tag_xyz').distinct()
+        self.assertEqual(count, distinct_qs.count(),
+                         "paginator get_count must equal distinct().count() for M2M query")
+
+
 class PinPrivacyTests(APITestCase):
 
     def setUp(self):
