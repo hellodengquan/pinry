@@ -12,12 +12,13 @@ class LinkCheckAdmin(admin.ModelAdmin):
         "id",
         "pin",
         "status",
+        "error_type",
         "action_status",
         "http_status_code",
         "response_time_ms",
         "checked_at",
     )
-    list_filter = ("status", "action_status")
+    list_filter = ("status", "action_status", "error_type")
     search_fields = ("url", "error_message")
     raw_id_fields = ("pin",)
     readonly_fields = ("checked_at", "action_at", "created_at")

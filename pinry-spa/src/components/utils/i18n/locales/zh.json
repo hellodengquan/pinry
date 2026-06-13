@@ -118,5 +118,16 @@
   "linkCheckEmptyHistory": "暂无扫描历史。",
   "linkCheckNoTasks": "还没有任务，点击上方按钮开始扫描。",
   "linkCheckConfirmDelete": "确定要删除这条 Pin 吗？",
-  "linkCheckSourceLink": "查看来源"
+  "linkCheckSourceLink": "查看来源",
+  "filterAll": "全部",
+  "errorTypeAll": "全部类型",
+  "errorTypeConnectionRefused": "连接被拒",
+  "errorTypeDnsError": "DNS 错误",
+  "errorTypeTimeout": "超时",
+  "errorTypeTooManyRedirects": "重定向过多",
+  "errorTypeSslError": "SSL 错误",
+  "errorTypeHttp4xx": "HTTP 4xx",
+  "errorTypeHttp5xx": "HTTP 5xx",
+  "errorTypeUnknown": "未知错误",
+  "errorTypeFilterLabel": "按错误类型筛选"
 }

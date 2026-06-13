@@ -1,6 +1,4 @@
-import threading
-
-from django.db.models import Subquery, OuterRef, Max
+from django.db.models import Subquery, OuterRef, Count
 from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_page
@@ -14,7 +12,7 @@ from rest_framework.viewsets import GenericViewSet
 from taggit.models import Tag
 
 from core import serializers as api
-from core.link_checker import check_single_pin, run_link_check_task
+from core.link_checker import check_single_pin
 from core.models import Image, Pin, Board, LinkCheck, LinkCheckTask
 from core.permissions import IsOwnerOrReadOnly, OwnerOnlyIfPrivate
 from core.serializers import (
@@ -22,6 +20,12 @@ from core.serializers import (
     filter_private_board,
     LinkCheckActionSerializer,
 )
+
+try:
+    from core.tasks import run_link_check_task as celery_run_link_check_task
+    CELERY_AVAILABLE = True
+except ImportError:
+    CELERY_AVAILABLE = False
 
 
 class ImageViewSet(mixins.CreateModelMixin, GenericViewSet):
@@ -92,7 +96,7 @@ class TagAutoCompleteViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
 class LinkCheckViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = api.LinkCheckSerializer
     filter_backends = (DjangoFilterBackend, OrderingFilter)
-    filter_fields = ("status", "action_status", "pin")
+    filter_fields = ("status", "action_status", "pin", "error_type")
     ordering_fields = ("-created_at", "-checked_at", "response_time_ms")
     ordering = ("-created_at",)
     permission_classes = [IsAuthenticated]
@@ -114,6 +118,35 @@ class LinkCheckViewSet(viewsets.ReadOnlyModelViewSet):
         if not self.request.user.is_superuser:
             query = query.filter(pin__submitter=self.request.user)
         return query.select_related("pin", "pin__image", "pin__submitter")
+
+    @action(detail=False, methods=["get"], url_path="error-type-stats")
+    def error_type_stats(self, request):
+        query = self.get_queryset().filter(status=LinkCheck.Status.FAILED)
+        latest = request.query_params.get("latest", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if latest:
+            latest_ids = (
+                LinkCheck.objects.filter(pin=OuterRef("pin"))
+                .order_by("-created_at")
+                .values_list("id", flat=True)[:1]
+            )
+            query = query.filter(id__in=Subquery(latest_ids))
+
+        only_unhandled = request.query_params.get(
+            "only_unhandled", ""
+        ).lower() in ("1", "true", "yes")
+        if only_unhandled:
+            query = query.filter(action_status=LinkCheck.ActionStatus.UNHANDLED)
+
+        stats = (
+            query.values("error_type")
+            .annotate(count=Count("id"))
+            .order_by("-count")
+        )
+        return Response({"results": list(stats)})
 
     @action(detail=True, methods=["post"], url_path="action")
     def handle_action(self, request, pk=None):
@@ -181,11 +214,19 @@ class LinkCheckTaskViewSet(viewsets.ReadOnlyModelViewSet):
     def start_task(self, request):
         task = LinkCheckTask.objects.create(submitter=request.user)
 
-        def run_in_background(task_id):
-            run_link_check_task(task_id)
+        if CELERY_AVAILABLE:
+            celery_run_link_check_task.delay(task.id)
+        else:
+            from .link_checker import run_link_check_task as sync_run_task
+            import threading
 
-        thread = threading.Thread(target=run_in_background, args=(task.id,), daemon=True)
-        thread.start()
+            def run_in_background(task_id):
+                sync_run_task(task_id)
+
+            thread = threading.Thread(
+                target=run_in_background, args=(task.id,), daemon=True
+            )
+            thread.start()
 
         return Response(
             api.LinkCheckTaskSerializer(task).data,

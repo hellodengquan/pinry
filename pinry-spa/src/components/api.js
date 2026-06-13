@@ -284,6 +284,10 @@ const LinkCheck = {
     const url = `${API_PREFIX}link-checks/`;
     return axios.get(url, { params });
   },
+  fetchErrorTypeStats(params = {}) {
+    const url = `${API_PREFIX}link-checks/error-type-stats/`;
+    return axios.get(url, { params });
+  },
   performAction(checkId, action, actionNote = '') {
     const url = `${API_PREFIX}link-checks/${checkId}/action/`;
     return axios.post(url, { action, action_note: actionNote });

@@ -118,5 +118,16 @@
     "linkCheckEmptyHistory": "Aucun historique pour l'instant.",
     "linkCheckNoTasks": "Aucune tâche. Cliquez sur le bouton ci-dessus.",
     "linkCheckConfirmDelete": "Êtes-vous sûr de vouloir supprimer cette fiche ?",
-    "linkCheckSourceLink": "Ouvrir la source"
+    "linkCheckSourceLink": "Ouvrir la source",
+    "filterAll": "Tous",
+    "errorTypeAll": "Tous les types",
+    "errorTypeConnectionRefused": "Connexion refusée",
+    "errorTypeDnsError": "Erreur DNS",
+    "errorTypeTimeout": "Délai dépassé",
+    "errorTypeTooManyRedirects": "Trop de redirections",
+    "errorTypeSslError": "Erreur SSL",
+    "errorTypeHttp4xx": "HTTP 4xx",
+    "errorTypeHttp5xx": "HTTP 5xx",
+    "errorTypeUnknown": "Erreur inconnue",
+    "errorTypeFilterLabel": "Filtrer par type d'erreur"
 }

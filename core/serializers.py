@@ -294,6 +294,8 @@ class LinkCheckSerializer(serializers.ModelSerializer):
             "status",
             "status_display",
             "http_status_code",
+            "error_type",
+            "error_type_display",
             "error_message",
             "response_time_ms",
             "checked_at",
@@ -309,6 +311,7 @@ class LinkCheckSerializer(serializers.ModelSerializer):
             "url",
             "status",
             "http_status_code",
+            "error_type",
             "error_message",
             "response_time_ms",
             "checked_at",
@@ -321,6 +324,15 @@ class LinkCheckSerializer(serializers.ModelSerializer):
     action_status_display = serializers.CharField(
         source="get_action_status_display", read_only=True
     )
+    error_type_display = serializers.SerializerMethodField()
+
+    def get_error_type_display(self, obj):
+        from core.link_checker import ErrorType
+
+        error_type_map = dict(ErrorType.CHOICES)
+        if not obj.error_type:
+            return None
+        return error_type_map.get(obj.error_type, obj.error_type)
 
 
 class LinkCheckActionSerializer(serializers.Serializer):

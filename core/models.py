@@ -153,6 +153,7 @@ class LinkCheck(models.Model):
     url = models.CharField(max_length=2048)
     status = models.CharField(max_length=16, choices=Status.CHOICES, default=Status.PENDING)
     http_status_code = models.IntegerField(null=True, blank=True)
+    error_type = models.CharField(max_length=32, null=True, blank=True)
     error_message = models.TextField(null=True, blank=True)
     response_time_ms = models.IntegerField(null=True, blank=True)
     checked_at = models.DateTimeField(null=True, blank=True)
@@ -170,6 +171,7 @@ class LinkCheck(models.Model):
         indexes = [
             models.Index(fields=["status", "action_status"]),
             models.Index(fields=["pin", "created_at"]),
+            models.Index(fields=["error_type"]),
         ]
 
     def __str__(self):

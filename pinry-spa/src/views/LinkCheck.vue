@@ -75,6 +75,30 @@
 
             <!-- Todo Tab -->
             <div v-if="activeTab === 'todo'">
+              <div class="field is-grouped is-grouped-multiline mb-4">
+                <p class="control">
+                  <span class="is-size-7 has-text-grey mr-2" style="line-height: 2.25;">
+                    {{ $t("errorTypeFilterLabel") }}:
+                  </span>
+                </p>
+                <p class="control" v-for="opt in errorTypeOptions" :key="'ft-' + opt.key">
+                  <button
+                    class="button is-small"
+                    :class="{ 'is-info': todoErrorType === opt.value }"
+                    @click="todoErrorType = opt.value; onTodoErrorTypeChange();"
+                  >
+                    <span>{{ $t(opt.labelKey) }}</span>
+                    <span
+                      v-if="opt.value === '' && todoStats.total > 0"
+                      class="tag is-dark is-light ml-1"
+                    >{{ todoStats.total }}</span>
+                    <span
+                      v-else-if="opt.value !== '' && errorTypeCount(opt.value) > 0"
+                      class="tag is-dark is-light ml-1"
+                    >{{ errorTypeCount(opt.value) }}</span>
+                  </button>
+                </p>
+              </div>
               <div v-if="loadingTodo" class="has-text-centered py-6">
                 <i class="fa fa-spinner fa-spin is-size-3"></i>
               </div>
@@ -111,6 +135,9 @@
                               </router-link>
                               <span v-else>Pin #{{ item.pin }}</span>
                               <span class="tag is-danger is-light ml-2">{{ statusLabel(item.status) }}</span>
+                              <span v-if="item.error_type" class="tag ml-1" :class="errorTypeTagClass(item.error_type)">
+                                {{ errorTypeLabel(item.error_type) }}
+                              </span>
                               <span class="tag is-warning is-light ml-1">{{ actionLabel(item.action_status) }}</span>
                             </p>
                             <p class="is-size-7 has-text-grey mt-1">
@@ -238,6 +265,22 @@
 
             <!-- All Checks Tab -->
             <div v-if="activeTab === 'all'">
+              <div class="field is-grouped is-grouped-multiline mb-4">
+                <p class="control">
+                  <span class="is-size-7 has-text-grey mr-2" style="line-height: 2.25;">
+                    {{ $t("errorTypeFilterLabel") }}:
+                  </span>
+                </p>
+                <p class="control" v-for="opt in errorTypeOptions" :key="'fa-' + opt.key">
+                  <button
+                    class="button is-small"
+                    :class="{ 'is-info': allErrorType === opt.value }"
+                    @click="allErrorType = opt.value; onAllErrorTypeChange();"
+                  >
+                    <span>{{ $t(opt.labelKey) }}</span>
+                  </button>
+                </p>
+              </div>
               <div v-if="loadingAll" class="has-text-centered py-6">
                 <i class="fa fa-spinner fa-spin is-size-3"></i>
               </div>
@@ -281,6 +324,9 @@
                                   'is-danger is-light': item.status === 'failed',
                                 }"
                               >{{ statusLabel(item.status) }}</span>
+                              <span v-if="item.error_type" class="tag ml-1" :class="errorTypeTagClass(item.error_type)">
+                                {{ errorTypeLabel(item.error_type) }}
+                              </span>
                               <span
                                 class="tag ml-1"
                                 :class="{
@@ -375,10 +421,23 @@ export default {
       loadingTasks: false,
       loadingAll: false,
       todoList: [],
-      todoStats: { total: 0 },
+      todoStats: { total: 0, byType: [] },
       taskList: [],
       allList: [],
       pollTimer: null,
+      todoErrorType: '',
+      allErrorType: '',
+      errorTypeOptions: [
+        { value: '', key: 'all', labelKey: 'errorTypeAll' },
+        { value: 'connection_refused', key: 'connection_refused', labelKey: 'errorTypeConnectionRefused' },
+        { value: 'dns_error', key: 'dns_error', labelKey: 'errorTypeDnsError' },
+        { value: 'timeout', key: 'timeout', labelKey: 'errorTypeTimeout' },
+        { value: 'too_many_redirects', key: 'too_many_redirects', labelKey: 'errorTypeTooManyRedirects' },
+        { value: 'ssl_error', key: 'ssl_error', labelKey: 'errorTypeSslError' },
+        { value: 'http_4xx', key: 'http_4xx', labelKey: 'errorTypeHttp4xx' },
+        { value: 'http_5xx', key: 'http_5xx', labelKey: 'errorTypeHttp5xx' },
+        { value: 'unknown', key: 'unknown', labelKey: 'errorTypeUnknown' },
+      ],
     };
   },
   components: {
@@ -425,19 +484,41 @@ export default {
     async loadTodoList() {
       this.loadingTodo = true;
       try {
-        const resp = await api.LinkCheck.fetchList({
+        const params = {
           status: 'failed',
           action_status: 'unhandled',
           latest: true,
           limit: 100,
-        });
+        };
+        if (this.todoErrorType) {
+          params.error_type = this.todoErrorType;
+        }
+        const resp = await api.LinkCheck.fetchList(params);
         this.todoList = resp.data.results || [];
         this.todoStats.total = resp.data.count || 0;
+        this.loadTodoStats();
       } catch (e) {
         console.error('Failed to load todo list', e);
       } finally {
         this.loadingTodo = false;
       }
+    },
+    async loadTodoStats() {
+      try {
+        const resp = await api.LinkCheck.fetchErrorTypeStats({
+          latest: true,
+          only_unhandled: true,
+        });
+        this.todoStats.byType = resp.data.results || [];
+      } catch (e) {
+        console.error('Failed to load todo stats', e);
+      }
+    },
+    onTodoErrorTypeChange() {
+      this.loadTodoList();
+    },
+    onAllErrorTypeChange() {
+      this.loadAllList();
     },
     async loadTaskList() {
       this.loadingTasks = true;
@@ -453,7 +534,11 @@ export default {
     async loadAllList() {
       this.loadingAll = true;
       try {
-        const resp = await api.LinkCheck.fetchList({ latest: true, limit: 100 });
+        const params = { latest: true, limit: 100 };
+        if (this.allErrorType) {
+          params.error_type = this.allErrorType;
+        }
+        const resp = await api.LinkCheck.fetchList(params);
         this.allList = resp.data.results || [];
       } catch (e) {
         console.error('Failed to load all list', e);
@@ -588,6 +673,38 @@ export default {
         handled: this.$t("linkCheckActionHandled"),
       };
       return map[a] || a;
+    },
+    errorTypeLabel(t) {
+      if (!t) return '';
+      const map = {
+        connection_refused: this.$t("errorTypeConnectionRefused"),
+        dns_error: this.$t("errorTypeDnsError"),
+        timeout: this.$t("errorTypeTimeout"),
+        too_many_redirects: this.$t("errorTypeTooManyRedirects"),
+        ssl_error: this.$t("errorTypeSslError"),
+        http_4xx: this.$t("errorTypeHttp4xx"),
+        http_5xx: this.$t("errorTypeHttp5xx"),
+        unknown: this.$t("errorTypeUnknown"),
+      };
+      return map[t] || t;
+    },
+    errorTypeTagClass(t) {
+      if (!t) return 'is-light';
+      const map = {
+        connection_refused: 'is-danger is-light',
+        dns_error: 'is-warning is-light',
+        timeout: 'is-info is-light',
+        too_many_redirects: 'is-link is-light',
+        ssl_error: 'is-danger is-light',
+        http_4xx: 'is-warning is-light',
+        http_5xx: 'is-danger is-light',
+        unknown: 'is-light',
+      };
+      return map[t] || 'is-light';
+    },
+    errorTypeCount(t) {
+      const stat = this.todoStats.byType.find(s => s.error_type === t);
+      return stat ? stat.count : 0;
     },
   },
 };

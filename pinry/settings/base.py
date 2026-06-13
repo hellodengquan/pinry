@@ -170,3 +170,33 @@ REST_FRAMEWORK = {
         'rest_framework.authentication.SessionAuthentication',
     ]
 }
+
+# ========== Celery ==========
+CELERY_BROKER_URL = os.environ.get(
+    "CELERY_BROKER_URL", "redis://127.0.0.1:6379/0"
+)
+CELERY_RESULT_BACKEND = os.environ.get(
+    "CELERY_RESULT_BACKEND", "redis://127.0.0.1:6379/0"
+)
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_TASK_ACKS_LATE = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+
+# ========== Link Check ==========
+LINK_CHECK_TIMEOUT = 15
+LINK_CHECK_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+# Per-domain rate limit: max requests per minute
+LINK_CHECK_RATE_LIMIT_PER_MINUTE = int(
+    os.environ.get("LINK_CHECK_RATE_LIMIT_PER_MINUTE", "10")
+)
+# Key prefix for rate limit counter in cache/broker
+LINK_CHECK_RATE_LIMIT_PREFIX = "pinry:link_check:rate"
+# Re-check same pin only after this many days
+LINK_CHECK_RECHECK_INTERVAL_DAYS = 7
