@@ -2,6 +2,8 @@ import Buefy from 'buefy';
 import Vue from 'vue';
 import { VueMasonryPlugin } from 'vue-masonry';
 import VueI18n from 'vue-i18n';
+import VueVirtualScroller from 'vue-virtual-scroller';
+import 'vue-virtual-scroller/dist/vue-virtual-scroller.css';
 import localeUtils from './components/utils/i18n';
 import App from './App.vue';
 import router from './router';
@@ -13,6 +15,7 @@ Vue.config.productionTip = false;
 Vue.use(Buefy);
 Vue.use(VueMasonryPlugin);
 Vue.use(VueI18n);
+Vue.use(VueVirtualScroller);
 setUpAxiosCsrfConfig();
 
 const i18n = new VueI18n({

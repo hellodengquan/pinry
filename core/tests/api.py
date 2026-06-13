@@ -634,13 +634,29 @@ class BoardBulkArchiveTests(APITestCase):
 
     def test_bulk_archive_over_100_ids_rejected(self):
         self.client.login(username=self.owner.username, password="password")
+        too_many = list(range(1, 5001))
+        resp = self.client.post(
+            self.bulk_archive_url,
+            data={"board_ids": too_many},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 413)
+        data = resp.json()
+        self.assertIn("Too many boards", data.get("detail", ""))
+        self.assertEqual(data.get("max_size"), 100)
+        self.assertEqual(data.get("requested"), 5000)
+
+    def test_bulk_archive_over_101_ids_rejected_with_413(self):
+        self.client.login(username=self.owner.username, password="password")
         too_many = list(range(1, 102))
         resp = self.client.post(
             self.bulk_archive_url,
             data={"board_ids": too_many},
             format="json",
         )
-        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.status_code, 413)
+        self.assertEqual(resp.json().get("max_size"), 100)
+        self.assertEqual(resp.json().get("requested"), 101)
 
     def test_bulk_archive_exactly_100_ids_accepted(self):
         self.client.login(username=self.owner.username, password="password")
@@ -650,7 +666,18 @@ class BoardBulkArchiveTests(APITestCase):
             data={"board_ids": ids_100},
             format="json",
         )
-        self.assertNotEqual(resp.status_code, 400)
+        self.assertNotIn(resp.status_code, (400, 413))
+
+    def test_bulk_unarchive_over_100_ids_rejected_with_413(self):
+        self.client.login(username=self.owner.username, password="password")
+        too_many = list(range(1, 102))
+        resp = self.client.post(
+            self.bulk_unarchive_url,
+            data={"board_ids": too_many},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 413)
+        self.assertEqual(resp.json().get("max_size"), 100)
 
     def test_bulk_archive_missing_ids_rejected(self):
         self.client.login(username=self.owner.username, password="password")

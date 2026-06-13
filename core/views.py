@@ -90,6 +90,17 @@ class BoardViewSet(viewsets.ModelViewSet):
                 {"detail": "Authentication required"},
                 status=401,
             )
+        raw_ids = request.data.get("board_ids", []) if isinstance(request.data, dict) else []
+        max_size = api.BoardBulkArchiveSerializer.MAX_BULK_SIZE
+        if isinstance(raw_ids, list) and len(raw_ids) > max_size:
+            return Response(
+                {
+                    "detail": f"Too many boards requested. Maximum allowed is {max_size}",
+                    "max_size": max_size,
+                    "requested": len(raw_ids),
+                },
+                status=413,
+            )
         serializer = api.BoardBulkArchiveSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         board_ids = serializer.validated_data['board_ids']

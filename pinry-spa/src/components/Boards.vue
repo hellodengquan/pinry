@@ -31,26 +31,23 @@
       </div>
 
       <div id="boards-container" class="container" v-if="blocks">
-        <div
-          v-masonry=""          transition-duration="0.3s"
-          item-selector=".grid-item"
-          column-width=".grid-sizer"
-          gutter=".gutter-sizer"
-        >
-          <template v-for="item in blocks">
-            <div v-bind:key="item.id"
-                 v-masonry-tile
-                 :class="item.class"
-                 class="grid">
-              <div class="grid-sizer"></div>
-              <div class="gutter-sizer"></div>
-              <div
-                class="board-card grid-item"
-                :class="{ 'is-selected': isSelected(item.id) }"
-                :data-board-id="item.id"
-                ref="boardCardRef"
-              >
-                <template v-if="isItemVisible(item.id)">
+
+        <!-- 小量场景：沿用原有瀑布流 -->
+        <template v-if="!useVirtualScroller">
+          <div
+            v-masonry=""          transition-duration="0.3s"
+            item-selector=".grid-item"
+            column-width=".grid-sizer"
+            gutter=".gutter-sizer"
+          >
+            <template v-for="item in blocks">
+              <div v-bind:key="item.id"
+                   v-masonry-tile
+                   :class="item.class"
+                   class="grid">
+                <div class="grid-sizer"></div>
+                <div class="gutter-sizer"></div>
+                <div class="board-card grid-item" :class="{ 'is-selected': isSelected(item.id) }">
                   <div @mouseenter="currentEditBoard = item.id"
                        @mouseleave="currentEditBoard = null"
                   >
@@ -81,14 +78,62 @@
                       </p>
                     </div>
                   </div>
-                </template>
-                <template v-else>
-                  <div class="board-card-placeholder" :style="getPlaceholderStyle(item)"></div>
-                </template>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <!-- 大量场景：RecycleScroller 虚拟滚动 + 网格行 -->
+        <RecycleScroller
+          v-else
+          class="virtual-scroller"
+          :items="rows"
+          :item-size="ROW_HEIGHT"
+          key-field="rowIndex"
+          v-observe-visibility
+        >
+          <template v-slot="{ item: row }">
+            <div class="board-row" :style="{ height: ROW_HEIGHT + 'px' }">
+              <div
+                v-for="board in row.boards"
+                :key="board.id"
+                class="board-card virtual-board-card"
+                :class="{ 'is-selected': isSelected(board.id) }"
+                @mouseenter="currentEditBoard = board.id"
+                @mouseleave="currentEditBoard = null"
+              >
+                <div v-if="showSelectionMode" class="select-checkbox" @click.stop="toggleSelect(board.id)">
+                  <b-checkbox :value="isSelected(board.id)" disabled></b-checkbox>
+                </div>
+                <div class="card-image">
+                  <BoardEditorUI
+                    v-show="shouldShowEdit(board)"
+                    :board="board"
+                    v-on:board-delete-succeed="reset"
+                    v-on:board-save-succeed="reset"
+                  ></BoardEditorUI>
+                  <router-link :to="{ name: 'board', params: { boardId: board.id } }">
+                    <img
+                      :src="board.preview_image_url"
+                      @load="onPinImageLoaded(board.id)"
+                      :style="{ width: CARD_WIDTH + 'px', height: CARD_WIDTH + 'px' }"
+                      v-show="board.preview_image_url"
+                      class="preview-image">
+                  </router-link>
+                </div>
+                <div class="board-footer" @click.stop="toggleSelect(board.id)">
+                  <p class="sub-title board-info">{{ board.name }}</p>
+                  <p class="description">
+                    <small>
+                      {{ $t("pinsInBoard") }}<span class="num-pins">{{ board.total_pins }}</span>
+                    </small>
+                  </p>
+                </div>
               </div>
             </div>
           </template>
-        </div>
+        </RecycleScroller>
       </div>
       <loadingSpinner v-bind:show="status.loading"></loadingSpinner>
       <noMore v-bind:show="!status.hasNext"></noMore>
@@ -106,14 +151,18 @@ import placeholder from '../assets/pinry-placeholder.jpg';
 import BoardEditorUI from './editors/BoardEditUI.vue';
 import bus from './utils/bus';
 
-const VIRTUAL_THRESHOLD = 200;
-const BOARD_FOOTER_ESTIMATED_HEIGHT = 72;
+const CARD_WIDTH = 240;
+const CARD_GAP = 15;
+const FOOTER_HEIGHT = 72;
+const CARD_HEIGHT = CARD_WIDTH + FOOTER_HEIGHT;
+const ROW_HEIGHT = CARD_HEIGHT + CARD_GAP;
+const VIRTUAL_MODE_THRESHOLD = 100;
 
 function createBoardItem(board) {
   const defaultPreviewImage = placeholder;
   const boardItem = {};
   let previewImage = {
-    image: { thumbnail: { image: null, width: 240, height: 240 } },
+    image: { thumbnail: { image: null, width: CARD_WIDTH, height: CARD_WIDTH } },
   };
   if (board.cover !== null) {
     previewImage = board.cover;
@@ -147,7 +196,6 @@ function initialData() {
     blocks: [],
     blocksMap: {},
     selectedIds: [],
-    visibleIds: new Set(),
     status: {
       loading: false,
       hasNext: true,
@@ -157,7 +205,9 @@ function initialData() {
     editorMeta: {
       user: { loggedIn: false, meta: { username: null } },
     },
+    containerWidth: 1200,
     _io: null,
+    _resizeHandler: null,
   };
 }
 
@@ -186,19 +236,46 @@ export default {
       if (this.blocks.length === 0) return false;
       return this.blocks.every(b => this.selectedIds.includes(b.id));
     },
+    useVirtualScroller() {
+      return this.blocks.length >= VIRTUAL_MODE_THRESHOLD;
+    },
+    columnCount() {
+      const gapTotal = Math.max(1, this.containerWidth / CARD_WIDTH);
+      const cols = Math.floor((this.containerWidth + CARD_GAP) / (CARD_WIDTH + CARD_GAP));
+      return Math.max(1, cols || 1);
+    },
+    rows() {
+      if (!this.useVirtualScroller) return [];
+      const cols = this.columnCount;
+      const result = [];
+      for (let i = 0; i < this.blocks.length; i += cols) {
+        const chunk = this.blocks.slice(i, i + cols);
+        result.push({
+          rowIndex: Math.floor(i / cols),
+          boards: chunk,
+        });
+      }
+      return result;
+    },
   },
   watch: {
     filters() {
       this.reset();
     },
-    blocks() {
-      this.$nextTick(() => { this.bindIntersectionObserver(); });
-    },
   },
   methods: {
     initialize() {
       this.initializeMeta();
+      this.measureContainer();
       this.fetchMore(true);
+    },
+    measureContainer() {
+      this.$nextTick(() => {
+        const el = document.getElementById('boards-container');
+        if (el) {
+          this.containerWidth = el.clientWidth || 1200;
+        }
+      });
     },
     initializeMeta() {
       const self = this;
@@ -219,6 +296,10 @@ export default {
         this._io.disconnect();
         this._io = null;
       }
+      if (this._resizeHandler) {
+        window.removeEventListener('resize', this._resizeHandler);
+        this._resizeHandler = null;
+      }
       const data = initialData();
       Object.entries(data).forEach(
         (kv) => {
@@ -228,47 +309,10 @@ export default {
       );
       this.initialize();
     },
-    bindIntersectionObserver() {
-      if (typeof window === 'undefined' || !('IntersectionObserver' in window)) {
-        this.blocks.forEach((b) => { this.visibleIds.add(b.id); });
-        return;
-      }
-      if (!this._io) {
-        const self = this;
-        const rootMargin = `${VIRTUAL_THRESHOLD}px 0px ${VIRTUAL_THRESHOLD}px 0px`;
-        this._io = new IntersectionObserver(
-          (entries) => {
-            entries.forEach((entry) => {
-              const idAttr = entry.target.getAttribute('data-board-id');
-              if (!idAttr) return;
-              const id = parseInt(idAttr, 10);
-              if (entry.isIntersecting) {
-                self.visibleIds.add(id);
-              } else {
-                self.visibleIds.delete(id);
-              }
-            });
-            self.$forceUpdate();
-          },
-          { rootMargin, threshold: 0 },
-        );
-      }
-      const cards = this.$refs.boardCardRef || [];
-      (Array.isArray(cards) ? cards : [cards]).forEach((el) => {
-        if (el && el.$el) this._io.observe(el.$el);
-        else if (el) this._io.observe(el);
-      });
-    },
-    isItemVisible(id) {
-      if (!this._io) return true;
-      return this.visibleIds.has(id);
-    },
-    getPlaceholderStyle(item) {
-      const height = (item.thumbHeight || 240) + BOARD_FOOTER_ESTIMATED_HEIGHT;
-      return {
-        width: `${item.thumbWidth || 240}px`,
-        height: `${height}px`,
-      };
+    bindResize() {
+      if (this._resizeHandler) return;
+      this._resizeHandler = () => this.measureContainer();
+      window.addEventListener('resize', this._resizeHandler);
     },
     shouldShowEdit(board) {
       if (!this.editorMeta.user.loggedIn) {
@@ -430,6 +474,7 @@ export default {
           }
           this.status.hasNext = !(next === null);
           this.status.loading = false;
+          this.$nextTick(() => this.measureContainer());
         },
         () => { this.status.loading = false; },
       );
@@ -440,11 +485,19 @@ export default {
       this._io.disconnect();
       this._io = null;
     }
+    if (this._resizeHandler) {
+      window.removeEventListener('resize', this._resizeHandler);
+      this._resizeHandler = null;
+    }
   },
   created() {
     bus.bus.$on(bus.events.refreshBoards, this.reset);
     this.registerScrollEvent();
+    this.bindResize();
     this.initialize();
+  },
+  mounted() {
+    this.measureContainer();
   },
 };
 </script>
@@ -493,14 +546,28 @@ $avatar-height: 30px;
   }
 }
 
+.virtual-scroller {
+  width: 100%;
+  overflow: visible;
+}
+
+.board-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 15px;
+  align-items: flex-start;
+  width: 100%;
+  .virtual-board-card {
+    flex: 0 0 240px;
+  }
+}
+
 .board-card{
   position: relative;
+  width: 240px;
   &.is-selected {
     box-shadow: 0 0 0 2px #3273dc;
-    border-radius: 3px;
-  }
-  .board-card-placeholder {
-    background-color: #fafafa;
     border-radius: 3px;
   }
   .select-checkbox {
@@ -513,7 +580,7 @@ $avatar-height: 30px;
     border-radius: 3px;
   }
   .card-image > img {
-    min-width: $pin-preview-width;
+    min-width: 240px;
     background-color: white;
     border-radius: 3px 3px 0 0;
     @include loader('../assets/loader.gif');
@@ -527,6 +594,7 @@ $avatar-height: 30px;
   box-shadow: 0 1px 0 #bbb;
   font-weight: bold;
   cursor: pointer;
+  min-height: 72px;
   .description {
     @include secondary-font;
     padding-left: 10px;
