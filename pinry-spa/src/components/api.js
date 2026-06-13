@@ -40,9 +40,11 @@ const Board = {
     const url = `${prefix}&offset=${offset}&limit=${limit}`;
     return axios.get(url);
   },
-  fetchArchivedList(username, offset = 0, limit = 50) {
-    const prefix = `${API_PREFIX}archived-boards/?submitter__username=${username}`;
-    const url = `${prefix}&offset=${offset}&limit=${limit}`;
+  fetchArchivedList(username, cursor = null) {
+    let url = `${API_PREFIX}archived-boards/?submitter__username=${username}`;
+    if (cursor) {
+      url += `&cursor=${encodeURIComponent(cursor)}`;
+    }
     return axios.get(url);
   },
   saveChanges(boardId, fieldsForm) {
@@ -177,8 +179,8 @@ function fetchBoardForUser(username, offset = 0, limit = 50) {
   return axios.get(url);
 }
 
-function fetchArchivedBoardForUser(username, offset = 0, limit = 50) {
-  return API.Board.fetchArchivedList(username, offset, limit);
+function fetchArchivedBoardForUser(username, cursor = null) {
+  return API.Board.fetchArchivedList(username, cursor);
 }
 
 const User = {

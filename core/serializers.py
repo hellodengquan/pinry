@@ -280,8 +280,10 @@ class TagAutoCompleteSerializer(serializers.ModelSerializer):
 
 
 class BoardBulkArchiveSerializer(serializers.Serializer):
+    MAX_BULK_SIZE = 100
+
     board_ids = serializers.ListField(
         child=serializers.IntegerField(min_value=1),
         allow_empty=False,
-        max_length=200,
+        max_length=MAX_BULK_SIZE,
     )

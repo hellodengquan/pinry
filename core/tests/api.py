@@ -448,13 +448,24 @@ class BoardArchivePermissionTests(APITestCase):
 
 
 class BoardArchiveOrderingPaginationTests(APITestCase):
-    """归档列表按时间排序与分页测试"""
+    """归档列表按时间排序与 cursor 分页测试"""
 
     def setUp(self):
         super(BoardArchiveOrderingPaginationTests, self).setUp()
         self.owner = create_user("owner")
         from django.utils import timezone
         from datetime import timedelta
+        from rest_framework.pagination import CursorPagination
+        from core import views
+
+        class _SmallCursorPagination(CursorPagination):
+            ordering = ('-archived_at', '-id')
+            page_size = 2
+            cursor_query_param = 'cursor'
+
+        self._orig_pagination = views.ArchivedBoardCursorPagination
+        views.ArchivedBoardCursorPagination = _SmallCursorPagination
+        views.ArchivedBoardViewSet.pagination_class = _SmallCursorPagination
 
         base_time = timezone.now()
         self.b1 = Board.objects.create(
@@ -474,6 +485,9 @@ class BoardArchiveOrderingPaginationTests(APITestCase):
         self.b3.save()
 
     def tearDown(self):
+        from core import views
+        views.ArchivedBoardCursorPagination = self._orig_pagination
+        views.ArchivedBoardViewSet.pagination_class = self._orig_pagination
         _teardown_models()
 
     def test_archived_list_ordered_by_archived_at_desc(self):
@@ -481,26 +495,53 @@ class BoardArchiveOrderingPaginationTests(APITestCase):
         url = reverse("archived-board-list")
         resp = self.client.get(url)
         self.assertEqual(resp.status_code, 200)
-        names = [b["name"] for b in resp.json()["results"]]
-        self.assertEqual(names, ["newest", "middle", "oldest"])
+        data = resp.json()
+        names = [b["name"] for b in data["results"]]
+        self.assertEqual(names[0], "newest")
+        self.assertEqual(names[1], "middle")
+        self.assertIsNotNone(data["next"])
+        next_url = data["next"].replace("http://testserver", "")
+        resp = self.client.get(next_url)
+        self.assertEqual(resp.json()["results"][0]["name"], "oldest")
 
-    def test_archived_list_pagination_limit_offset(self):
+    def test_archived_list_cursor_pagination_pages_through(self):
         self.client.login(username=self.owner.username, password="password")
-        url = "{}?limit=2&offset=0".format(reverse("archived-board-list"))
+        url = reverse("archived-board-list")
         resp = self.client.get(url)
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
-        self.assertEqual(data["count"], 3)
         self.assertEqual(len(data["results"]), 2)
         self.assertIsNotNone(data["next"])
-        self.assertIsNone(data["previous"])
+        self.assertEqual([b["name"] for b in data["results"]], ["newest", "middle"])
 
-        url = data["next"].replace("http://testserver", "")
-        resp = self.client.get(url)
+        next_url = data["next"].replace("http://testserver", "")
+        self.assertIn("cursor=", next_url)
+        resp = self.client.get(next_url)
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertEqual(len(data["results"]), 1)
+        self.assertEqual(data["results"][0]["name"], "oldest")
         self.assertIsNone(data["next"])
+
+    def test_archived_list_cursor_pagination_stable_after_new_archive(self):
+        from django.utils import timezone
+        from datetime import timedelta
+        self.client.login(username=self.owner.username, password="password")
+        url = reverse("archived-board-list")
+        resp = self.client.get(url)
+        data = resp.json()
+        next_url = data["next"].replace("http://testserver", "")
+
+        Board.objects.create(
+            name="just_archived", submitter=self.owner, is_archived=True,
+            archived_at=timezone.now() - timedelta(hours=1),
+        )
+
+        resp = self.client.get(next_url)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(len(data["results"]), 1)
+        self.assertEqual(data["results"][0]["name"], "oldest")
 
 
 class BoardBulkArchiveTests(APITestCase):
@@ -590,6 +631,26 @@ class BoardBulkArchiveTests(APITestCase):
             format="json",
         )
         self.assertEqual(resp.status_code, 400)
+
+    def test_bulk_archive_over_100_ids_rejected(self):
+        self.client.login(username=self.owner.username, password="password")
+        too_many = list(range(1, 102))
+        resp = self.client.post(
+            self.bulk_archive_url,
+            data={"board_ids": too_many},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_bulk_archive_exactly_100_ids_accepted(self):
+        self.client.login(username=self.owner.username, password="password")
+        ids_100 = list(range(1, 101))
+        resp = self.client.post(
+            self.bulk_archive_url,
+            data={"board_ids": ids_100},
+            format="json",
+        )
+        self.assertNotEqual(resp.status_code, 400)
 
     def test_bulk_archive_missing_ids_rejected(self):
         self.client.login(username=self.owner.username, password="password")

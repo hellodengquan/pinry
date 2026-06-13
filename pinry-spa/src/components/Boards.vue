@@ -44,37 +44,47 @@
                  class="grid">
               <div class="grid-sizer"></div>
               <div class="gutter-sizer"></div>
-              <div class="board-card grid-item" :class="{ 'is-selected': isSelected(item.id) }">
-                <div @mouseenter="currentEditBoard = item.id"
-                     @mouseleave="currentEditBoard = null"
-                >
-                  <div v-if="showSelectionMode" class="select-checkbox" @click.stop="toggleSelect(item.id)">
-                    <b-checkbox :value="isSelected(item.id)" disabled></b-checkbox>
+              <div
+                class="board-card grid-item"
+                :class="{ 'is-selected': isSelected(item.id) }"
+                :data-board-id="item.id"
+                ref="boardCardRef"
+              >
+                <template v-if="isItemVisible(item.id)">
+                  <div @mouseenter="currentEditBoard = item.id"
+                       @mouseleave="currentEditBoard = null"
+                  >
+                    <div v-if="showSelectionMode" class="select-checkbox" @click.stop="toggleSelect(item.id)">
+                      <b-checkbox :value="isSelected(item.id)" disabled></b-checkbox>
+                    </div>
+                    <div class="card-image">
+                      <BoardEditorUI
+                        v-show="shouldShowEdit(item)"
+                        :board="item"
+                        v-on:board-delete-succeed="reset"
+                        v-on:board-save-succeed="reset"
+                      ></BoardEditorUI>
+                      <router-link :to="{ name: 'board', params: { boardId: item.id } }">
+                        <img :src="item.preview_image_url"
+                           @load="onPinImageLoaded(item.id)"
+                           :style="item.style"
+                           v-show="item.preview_image_url"
+                           class="preview-image">
+                      </router-link>
+                    </div>
+                    <div class="board-footer" @click.stop="toggleSelect(item.id)">
+                      <p class="sub-title board-info">{{ item.name }}</p>
+                      <p class="description">
+                        <small>
+                          {{ $t("pinsInBoard") }}<span class="num-pins">{{ item.total_pins }}</span>
+                        </small>
+                      </p>
+                    </div>
                   </div>
-                  <div class="card-image">
-                    <BoardEditorUI
-                      v-show="shouldShowEdit(item)"
-                      :board="item"
-                      v-on:board-delete-succeed="reset"
-                      v-on:board-save-succeed="reset"
-                    ></BoardEditorUI>
-                    <router-link :to="{ name: 'board', params: { boardId: item.id } }">
-                      <img :src="item.preview_image_url"
-                         @load="onPinImageLoaded(item.id)"
-                         :style="item.style"
-                         v-show="item.preview_image_url"
-                         class="preview-image">
-                    </router-link>
-                  </div>
-                  <div class="board-footer" @click.stop="toggleSelect(item.id)">
-                    <p class="sub-title board-info">{{ item.name }}</p>
-                    <p class="description">
-                      <small>
-                        {{ $t("pinsInBoard") }}<span class="num-pins">{{ item.total_pins }}</span>
-                      </small>
-                    </p>
-                  </div>
-                </div>
+                </template>
+                <template v-else>
+                  <div class="board-card-placeholder" :style="getPlaceholderStyle(item)"></div>
+                </template>
               </div>
             </div>
           </template>
@@ -95,6 +105,9 @@ import scroll from './utils/scroll';
 import placeholder from '../assets/pinry-placeholder.jpg';
 import BoardEditorUI from './editors/BoardEditUI.vue';
 import bus from './utils/bus';
+
+const VIRTUAL_THRESHOLD = 200;
+const BOARD_FOOTER_ESTIMATED_HEIGHT = 72;
 
 function createBoardItem(board) {
   const defaultPreviewImage = placeholder;
@@ -117,6 +130,8 @@ function createBoardItem(board) {
   } else {
     boardItem.preview_image_url = defaultPreviewImage;
   }
+  boardItem.thumbWidth = previewImage.image.thumbnail.width;
+  boardItem.thumbHeight = previewImage.image.thumbnail.height;
   boardItem.style = {
     width: `${previewImage.image.thumbnail.width}px`,
     height: `${previewImage.image.thumbnail.height}px`,
@@ -132,14 +147,17 @@ function initialData() {
     blocks: [],
     blocksMap: {},
     selectedIds: [],
+    visibleIds: new Set(),
     status: {
       loading: false,
       hasNext: true,
       offset: 0,
+      nextCursor: null,
     },
     editorMeta: {
       user: { loggedIn: false, meta: { username: null } },
     },
+    _io: null,
   };
 }
 
@@ -173,6 +191,9 @@ export default {
     filters() {
       this.reset();
     },
+    blocks() {
+      this.$nextTick(() => { this.bindIntersectionObserver(); });
+    },
   },
   methods: {
     initialize() {
@@ -194,6 +215,10 @@ export default {
       );
     },
     reset() {
+      if (this._io) {
+        this._io.disconnect();
+        this._io = null;
+      }
       const data = initialData();
       Object.entries(data).forEach(
         (kv) => {
@@ -202,6 +227,48 @@ export default {
         },
       );
       this.initialize();
+    },
+    bindIntersectionObserver() {
+      if (typeof window === 'undefined' || !('IntersectionObserver' in window)) {
+        this.blocks.forEach((b) => { this.visibleIds.add(b.id); });
+        return;
+      }
+      if (!this._io) {
+        const self = this;
+        const rootMargin = `${VIRTUAL_THRESHOLD}px 0px ${VIRTUAL_THRESHOLD}px 0px`;
+        this._io = new IntersectionObserver(
+          (entries) => {
+            entries.forEach((entry) => {
+              const idAttr = entry.target.getAttribute('data-board-id');
+              if (!idAttr) return;
+              const id = parseInt(idAttr, 10);
+              if (entry.isIntersecting) {
+                self.visibleIds.add(id);
+              } else {
+                self.visibleIds.delete(id);
+              }
+            });
+            self.$forceUpdate();
+          },
+          { rootMargin, threshold: 0 },
+        );
+      }
+      const cards = this.$refs.boardCardRef || [];
+      (Array.isArray(cards) ? cards : [cards]).forEach((el) => {
+        if (el && el.$el) this._io.observe(el.$el);
+        else if (el) this._io.observe(el);
+      });
+    },
+    isItemVisible(id) {
+      if (!this._io) return true;
+      return this.visibleIds.has(id);
+    },
+    getPlaceholderStyle(item) {
+      const height = (item.thumbHeight || 240) + BOARD_FOOTER_ESTIMATED_HEIGHT;
+      return {
+        width: `${item.thumbWidth || 240}px`,
+        height: `${height}px`,
+      };
     },
     shouldShowEdit(board) {
       if (!this.editorMeta.user.loggedIn) {
@@ -322,11 +389,13 @@ export default {
         return;
       }
       let promise;
+      let useCursor = false;
       if (this.filters.boardUsername && this.filters.showArchived) {
         promise = API.fetchArchivedBoardForUser(
           this.filters.boardUsername,
-          this.status.offset,
+          this.status.nextCursor,
         );
+        useCursor = true;
       } else if (this.filters.boardUsername) {
         promise = API.fetchBoardForUser(
           this.filters.boardUsername,
@@ -351,12 +420,26 @@ export default {
           newBlocks = this.blocks.concat(newBlocks);
           this.blocks = newBlocks;
           this.status.offset = newBlocks.length;
+          if (useCursor) {
+            if (next) {
+              const url = new URL(next);
+              this.status.nextCursor = url.searchParams.get('cursor') || null;
+            } else {
+              this.status.nextCursor = null;
+            }
+          }
           this.status.hasNext = !(next === null);
           this.status.loading = false;
         },
         () => { this.status.loading = false; },
       );
     },
+  },
+  beforeDestroy() {
+    if (this._io) {
+      this._io.disconnect();
+      this._io = null;
+    }
   },
   created() {
     bus.bus.$on(bus.events.refreshBoards, this.reset);
@@ -414,6 +497,10 @@ $avatar-height: 30px;
   position: relative;
   &.is-selected {
     box-shadow: 0 0 0 2px #3273dc;
+    border-radius: 3px;
+  }
+  .board-card-placeholder {
+    background-color: #fafafa;
     border-radius: 3px;
   }
   .select-checkbox {

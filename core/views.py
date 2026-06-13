@@ -5,6 +5,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import viewsets, mixins, routers
 from rest_framework.decorators import action
 from rest_framework.filters import SearchFilter, OrderingFilter
+from rest_framework.pagination import CursorPagination
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 from taggit.models import Tag
@@ -13,6 +14,12 @@ from core import serializers as api
 from core.models import Image, Pin, Board
 from core.permissions import IsOwnerOrReadOnly, OwnerOnlyIfPrivate
 from core.serializers import filter_private_pin, filter_private_board
+
+
+class ArchivedBoardCursorPagination(CursorPagination):
+    ordering = ('-archived_at', '-id')
+    page_size = 50
+    cursor_query_param = 'cursor'
 
 
 class ImageViewSet(mixins.CreateModelMixin, GenericViewSet):
@@ -105,11 +112,10 @@ class ArchivedBoardViewSet(
     viewsets.GenericViewSet,
 ):
     serializer_class = api.BoardSerializer
-    filter_backends = (DjangoFilterBackend, OrderingFilter, SearchFilter)
+    pagination_class = ArchivedBoardCursorPagination
+    filter_backends = (DjangoFilterBackend, SearchFilter)
     search_fields = ("name", )
     filter_fields = ("submitter__username", )
-    ordering_fields = ('-archived_at', '-id', )
-    ordering = ('-archived_at', '-id', )
     permission_classes = [IsOwnerOrReadOnly("submitter"), OwnerOnlyIfPrivate("submitter")]
 
     def get_queryset(self):
