@@ -77,7 +77,7 @@
 
 <script>
 import API from './api';
-import pinHandler from './utils/PinHandler';
+import MediaPreviewService from './utils/MediaPreviewService';
 import PinPreview from './PinPreview.vue';
 import loadingSpinner from './loadingSpinner.vue';
 import noMore from './noMore.vue';
@@ -87,25 +87,7 @@ import EditorUI from './editors/PinEditorUI.vue';
 import niceLinks from './utils/niceLinks';
 
 function createImageItem(pin) {
-  const image = {};
-  image.url = pinHandler.escapeUrl(pin.image.thumbnail.image);
-  image.id = pin.id;
-  image.owner_id = pin.submitter.id;
-  image.private = pin.private;
-  image.description = pin.description;
-  image.tags = pin.tags;
-  image.author = pin.submitter.username;
-  image.avatar = `//gravatar.com/avatar/${pin.submitter.gravatar}`;
-  image.large_image_url = pinHandler.escapeUrl(pin.image.image);
-  image.original_image_url = pin.url;
-  image.referer = pin.referer;
-  image.orgianl_width = pin.image.width;
-  image.style = {
-    width: `${pin.image.thumbnail.width}px`,
-    height: `${pin.image.thumbnail.height}px`,
-  };
-  image.class = {};
-  return image;
+  return MediaPreviewService.buildDisplayItem(pin);
 }
 
 function initialData() {

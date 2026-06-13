@@ -4,6 +4,7 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from taggit.models import Tag
 
+from core.media_preview import MediaPreviewService
 from core.models import Image, Board
 from core.models import Pin
 from django_images.models import Thumbnail
@@ -94,6 +95,7 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
             "id",
             "submitter",
             "url",
+            "media_type",
             "description",
             "referer",
             "image",
@@ -102,6 +104,7 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
         )
 
     submitter = UserSerializer(read_only=True)
+    media_type = serializers.SerializerMethodField(read_only=True)
     tags = TagSerializer(
         many=True,
         source="tag_list",
@@ -113,6 +116,9 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
         write_only=True,
         required=False,
     )
+
+    def get_media_type(self, obj):
+        return MediaPreviewService.detect_media_type(obj.url)
 
     def create(self, validated_data):
         if 'url' not in validated_data and\
@@ -126,10 +132,9 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
         submitter = self.context['request'].user
         if 'url' in validated_data and validated_data['url']:
             url = validated_data['url']
-            image = Image.objects.create_for_url(
-                url,
-                validated_data.get('referer', url),
-            )
+            referer = validated_data.get('referer', url)
+            preview = MediaPreviewService.build_preview_from_url(url, referer)
+            image = preview.get('image')
             if not image:
                 raise ValidationError({"url": "invalid image content"})
         else:

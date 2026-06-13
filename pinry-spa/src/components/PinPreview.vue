@@ -2,43 +2,53 @@
   <div class="pin-preview-modal">
     <section>
         <div class="card">
-          <div class="card-image">
+          <div class="card-image" v-if="previewItem.mediaType === 'image'">
             <figure class="image">
-              <img :src="pinItem.large_image_url" alt="Image">
+              <img :src="previewItem.largeImageUrl" alt="Image">
             </figure>
+          </div>
+          <div class="card-image video-preview" v-else-if="previewItem.mediaType === 'video'">
+            <video :src="previewItem.videoUrl" controls class="preview-video"></video>
+          </div>
+          <div class="card-image link-preview" v-else-if="previewItem.mediaType === 'web_link'">
+            <a :href="previewItem.webLinkUrl" target="_blank" class="link-preview-card">
+              <b-icon icon="link" size="is-large"></b-icon>
+              <p class="link-url">{{ previewItem.webLinkUrl }}</p>
+            </a>
+            <img v-if="previewItem.largeImageUrl" :src="previewItem.largeImageUrl" alt="Preview">
           </div>
           <div class="card-content">
             <div class="content">
-                <p class="description title" v-html="niceLinks(pinItem.description)"></p>
+                <p class="description title" v-html="niceLinks(previewItem.description)"></p>
             </div>
             <div class="media">
               <div class="media-left">
                 <figure class="image is-48x48">
-                  <img :src="pinItem.avatar" alt="Image">
+                  <img :src="previewItem.avatar" alt="Image">
                 </figure>
               </div>
               <div class="media-content">
                 <div class="is-pulled-left">
-                  <p class="title is-4 pin-meta-info"><span class="dim">{{ $t("pinnedByTitle") }}</span><span class="author">{{ pinItem.author }}</span></p>
-                  <p class="subtitle is-6" v-show="pinItem.tags.length > 0">
+                  <p class="title is-4 pin-meta-info"><span class="dim">{{ $t("pinnedByTitle") }}</span><span class="author">{{ previewItem.author }}</span></p>
+                  <p class="subtitle is-6" v-show="previewItem.tags.length > 0">
                     <span class="subtitle dim">in&nbsp;</span>
-                    <template v-for="tag in pinItem.tags">
+                    <template v-for="tag in previewItem.tags">
                       <b-tag v-bind:key="tag" type="is-info" class="pin-preview-tag">{{ tag }}</b-tag>
                     </template>
                   </p>
                 </div>
                 <div class="is-pulled-right">
-                  <a :href="pinItem.referer" target="_blank">
+                  <a :href="previewItem.referer" target="_blank">
                     <b-button
-                        v-show="pinItem.referer !== null"
+                        v-show="previewItem.referer !== null"
                         class="meta-link"
                         type="is-warning">
                       {{ $t("sourceButton") }}
                     </b-button>
                   </a>
-                  <a :href="pinItem.original_image_url" target="_blank">
+                  <a :href="previewItem.originalImageUrl" target="_blank">
                     <b-button
-                        v-show="pinItem.original_image_url !== null"
+                        v-show="previewItem.originalImageUrl !== null"
                         class="meta-link"
                         type="is-link">
                         {{ $t("originalImageButton") }}
@@ -60,11 +70,17 @@
 </template>
 
 <script>
+import MediaPreviewService from './utils/MediaPreviewService';
 import niceLinks from './utils/niceLinks';
 
 export default {
   name: 'PinPreview',
   props: ['pinItem'],
+  computed: {
+    previewItem() {
+      return MediaPreviewService.buildPreviewItem(this.pinItem);
+    },
+  },
   methods: {
     closeAndGoTo() {
       this.$parent.close();
@@ -124,5 +140,22 @@ export default {
   margin-left: auto;
   margin-right: auto;
   width: auto;
+}
+.video-preview .preview-video {
+  max-width: 100%;
+  max-height: 70vh;
+  display: block;
+  margin: 0 auto;
+}
+.link-preview-card {
+  display: block;
+  text-align: center;
+  padding: 40px 20px;
+  color: #fff;
+  .link-url {
+    margin-top: 10px;
+    word-break: break-all;
+    font-size: 14px;
+  }
 }
 </style>

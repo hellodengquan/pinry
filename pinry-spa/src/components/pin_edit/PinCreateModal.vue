@@ -112,6 +112,7 @@ import bus from '../utils/bus';
 import ModelForm from '../utils/ModelForm';
 import Loading from '../utils/Loading';
 import AutoComplete from '../utils/AutoComplete';
+import MediaPreviewService from '../utils/MediaPreviewService';
 import niceLinks from '../utils/niceLinks';
 
 
@@ -168,11 +169,12 @@ export default {
     this.fetchTagList();
     if (this.isEdit) {
       this.editorMeta.title = 'EditPinTitle';
-      this.pinModel.form.url.value = this.existedPin.url;
-      this.pinModel.form.referer.value = this.existedPin.referer;
-      this.pinModel.form.description.value = this.existedPin.description;
-      this.pinModel.form.tags.value = this.existedPin.tags;
-      this.pinModel.form.private.value = this.existedPin.private;
+      const formModel = MediaPreviewService.buildFormModel(this.existedPin);
+      this.pinModel.form.url.value = formModel.url;
+      this.pinModel.form.referer.value = formModel.referer;
+      this.pinModel.form.description.value = formModel.description;
+      this.pinModel.form.tags.value = formModel.tags;
+      this.pinModel.form.private.value = formModel.private;
     } else {
       this.pinModel.form.private.value = false;
     }

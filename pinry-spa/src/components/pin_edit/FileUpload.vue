@@ -30,7 +30,7 @@
 
 <script>
 import API from '../api';
-import utils from '../utils/PinHandler';
+import MediaPreviewService from '../utils/MediaPreviewService';
 
 export default {
   name: 'FileUpload',
@@ -53,9 +53,9 @@ export default {
       this.loading = true;
       API.Pin.uploadImage(newFile).then(
         (resp) => {
-          this.uploadedImage = resp.data;
+          this.uploadedImage = MediaPreviewService.buildUploadPreview(resp.data);
           this.loading = false;
-          this.$emit('imageUploadSucceed', this.uploadedImage.id);
+          this.$emit('imageUploadSucceed', this.uploadedImage.imageId);
         },
         () => {
           this.loading = false;
@@ -70,7 +70,7 @@ export default {
         return this.previewImageURL;
       }
       if (this.uploadedImage !== null) {
-        return utils.escapeUrl(this.uploadedImage.thumbnail.image);
+        return this.uploadedImage.previewUrl;
       }
       return null;
     },

@@ -19,12 +19,20 @@ def _teardown_models():
 
 
 def mock_requests_get(url, **kwargs):
-    response = mock.Mock(content=open('docs/src/imgs/logo-dark.png', 'rb').read())
+    response = mock.Mock(
+        content=open('docs/src/imgs/logo-dark.png', 'rb').read(),
+        headers={'Content-Type': 'image/png'},
+    )
+    response.raise_for_status.return_value = None
     return response
 
 
 def mock_requests_get_with_non_image_content(url, **kwargs):
-    response = mock.Mock(content=b"abcd")
+    response = mock.Mock(
+        content=b"abcd",
+        headers={'Content-Type': 'text/html'},
+    )
+    response.raise_for_status.return_value = None
     return response
 
 

@@ -56,7 +56,7 @@
 
 <script>
 import API from './api';
-import pinHandler from './utils/PinHandler';
+import MediaPreviewService from './utils/MediaPreviewService';
 import loadingSpinner from './loadingSpinner.vue';
 import noMore from './noMore.vue';
 import scroll from './utils/scroll';
@@ -78,7 +78,7 @@ function createBoardItem(board) {
   boardItem.private = board.private;
   boardItem.total_pins = board.total_pins;
   if (previewImage.image.thumbnail.image !== null) {
-    boardItem.preview_image_url = pinHandler.escapeUrl(
+    boardItem.preview_image_url = MediaPreviewService.escapeUrl(
       previewImage.image.thumbnail.image,
     );
   } else {
