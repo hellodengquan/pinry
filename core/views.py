@@ -69,6 +69,35 @@ class BoardViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(board)
         return Response(serializer.data)
 
+    @action(detail=False, methods=['post'], url_path='bulk-archive', url_name='bulk-archive')
+    def bulk_archive(self, request):
+        return self._bulk_toggle_archive(request, archive=True)
+
+    @action(detail=False, methods=['post'], url_path='bulk-unarchive', url_name='bulk-unarchive')
+    def bulk_unarchive(self, request):
+        return self._bulk_toggle_archive(request, archive=False)
+
+    def _bulk_toggle_archive(self, request, archive=True):
+        if not request.user.is_authenticated:
+            return Response(
+                {"detail": "Authentication required"},
+                status=401,
+            )
+        serializer = api.BoardBulkArchiveSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        board_ids = serializer.validated_data['board_ids']
+        now = timezone.now()
+        queryset = Board.objects.filter(id__in=board_ids, submitter=request.user)
+        if archive:
+            updated = queryset.filter(is_archived=False).update(is_archived=True, archived_at=now)
+        else:
+            updated = queryset.filter(is_archived=True).update(is_archived=False, archived_at=None)
+        changed_ids = list(queryset.values_list('id', flat=True))
+        return Response({
+            "updated_count": updated,
+            "board_ids": changed_ids,
+        })
+
 
 class ArchivedBoardViewSet(
     mixins.ListModelMixin,

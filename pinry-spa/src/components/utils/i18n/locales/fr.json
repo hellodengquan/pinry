@@ -88,5 +88,15 @@
     "boardUnarchiveFailed": "Échec de la restauration du tableau",
     "deleteBoardConfirm": "Supprimer ce tableau ?",
     "activeBoards": "Actifs",
-    "archivedBoards": "Archivés"
+    "archivedBoards": "Archivés",
+    "selectAll": "Tout sélectionner",
+    "clearSelection": "Effacer la sélection",
+    "bulkArchive": "Archiver la sélection",
+    "bulkUnarchive": "Restaurer la sélection",
+    "bulkArchiveConfirm": "Archiver {count} tableaux sélectionnés ?",
+    "bulkUnarchiveConfirm": "Restaurer {count} tableaux sélectionnés ?",
+    "bulkArchiveSuccess": "{count} tableaux archivés",
+    "bulkUnarchiveSuccess": "{count} tableaux restaurés",
+    "bulkOperationFailed": "Échec de l'opération",
+    "selectedCount": "{count} sélectionnés"
 }

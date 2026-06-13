@@ -88,5 +88,15 @@
   "boardUnarchiveFailed": "画板恢复失败",
   "deleteBoardConfirm": "确认删除该画板？",
   "activeBoards": "活跃",
-  "archivedBoards": "已归档"
+  "archivedBoards": "已归档",
+  "selectAll": "全选",
+  "clearSelection": "清除选择",
+  "bulkArchive": "归档选中",
+  "bulkUnarchive": "恢复选中",
+  "bulkArchiveConfirm": "确认归档选中的 {count} 个画板？",
+  "bulkUnarchiveConfirm": "确认恢复选中的 {count} 个画板？",
+  "bulkArchiveSuccess": "已归档 {count} 个画板",
+  "bulkUnarchiveSuccess": "已恢复 {count} 个画板",
+  "bulkOperationFailed": "操作失败",
+  "selectedCount": "已选择 {count} 项"
 }

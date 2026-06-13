@@ -277,3 +277,11 @@ class TagAutoCompleteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Tag
         fields = ('name', )
+
+
+class BoardBulkArchiveSerializer(serializers.Serializer):
+    board_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        allow_empty=False,
+        max_length=200,
+    )

@@ -1,6 +1,35 @@
 <template>
   <div class="boards">
     <section class="section">
+      <div v-if="showSelectionBar" class="selection-bar">
+        <div class="selection-info">
+          <span>{{ $t("selectedCount", { count: selectedIds.length }) }}</span>
+        </div>
+        <div class="selection-actions">
+          <button class="button is-small" @click="toggleSelectAll">
+            {{ isAllSelected ? $t("clearSelection") : $t("selectAll") }}
+          </button>
+          <button
+            v-if="!filters.showArchived"
+            class="button is-small is-primary"
+            @click="confirmBulkArchive"
+            :disabled="selectedIds.length === 0"
+          >
+            <b-icon icon="archive" custom-size="mdi-18px"></b-icon>
+            <span>{{ $t("bulkArchive") }}</span>
+          </button>
+          <button
+            v-else
+            class="button is-small is-primary"
+            @click="confirmBulkUnarchive"
+            :disabled="selectedIds.length === 0"
+          >
+            <b-icon icon="unarchive" custom-size="mdi-18px"></b-icon>
+            <span>{{ $t("bulkUnarchive") }}</span>
+          </button>
+        </div>
+      </div>
+
       <div id="boards-container" class="container" v-if="blocks">
         <div
           v-masonry=""          transition-duration="0.3s"
@@ -15,10 +44,13 @@
                  class="grid">
               <div class="grid-sizer"></div>
               <div class="gutter-sizer"></div>
-              <div class="board-card grid-item">
+              <div class="board-card grid-item" :class="{ 'is-selected': isSelected(item.id) }">
                 <div @mouseenter="currentEditBoard = item.id"
                      @mouseleave="currentEditBoard = null"
                 >
+                  <div v-if="showSelectionMode" class="select-checkbox" @click.stop="toggleSelect(item.id)">
+                    <b-checkbox :value="isSelected(item.id)" disabled></b-checkbox>
+                  </div>
                   <div class="card-image">
                     <BoardEditorUI
                       v-show="shouldShowEdit(item)"
@@ -34,7 +66,7 @@
                          class="preview-image">
                     </router-link>
                   </div>
-                  <div class="board-footer">
+                  <div class="board-footer" @click.stop="toggleSelect(item.id)">
                     <p class="sub-title board-info">{{ item.name }}</p>
                     <p class="description">
                       <small>
@@ -99,6 +131,7 @@ function initialData() {
     currentEditBoard: null,
     blocks: [],
     blocksMap: {},
+    selectedIds: [],
     status: {
       loading: false,
       hasNext: true,
@@ -119,6 +152,23 @@ export default {
   },
   data: initialData,
   props: ['filters'],
+  computed: {
+    isCurrentUserBoardOwner() {
+      if (!this.editorMeta.user.loggedIn) return false;
+      if (!this.filters || !this.filters.boardUsername) return false;
+      return this.editorMeta.user.meta.username === this.filters.boardUsername;
+    },
+    showSelectionMode() {
+      return this.isCurrentUserBoardOwner;
+    },
+    showSelectionBar() {
+      return this.showSelectionMode;
+    },
+    isAllSelected() {
+      if (this.blocks.length === 0) return false;
+      return this.blocks.every(b => this.selectedIds.includes(b.id));
+    },
+  },
   watch: {
     filters() {
       this.reset();
@@ -161,6 +211,71 @@ export default {
         return false;
       }
       return this.currentEditBoard === board.id;
+    },
+    isSelected(id) {
+      return this.selectedIds.includes(id);
+    },
+    toggleSelect(id) {
+      if (!this.showSelectionMode) return;
+      const idx = this.selectedIds.indexOf(id);
+      if (idx >= 0) {
+        this.selectedIds.splice(idx, 1);
+      } else {
+        this.selectedIds.push(id);
+      }
+    },
+    toggleSelectAll() {
+      if (this.isAllSelected) {
+        this.selectedIds = [];
+      } else {
+        this.selectedIds = this.blocks.map(b => b.id);
+      }
+    },
+    confirmBulkArchive() {
+      const self = this;
+      const count = this.selectedIds.length;
+      if (count === 0) return;
+      this.$buefy.dialog.confirm({
+        message: this.$t('bulkArchiveConfirm', { count }),
+        onConfirm: () => {
+          API.Board.bulkArchive(self.selectedIds).then(
+            (resp) => {
+              self.$buefy.toast.open(
+                self.$t('bulkArchiveSuccess', { count: resp.data.updated_count }),
+              );
+              self.reset();
+            },
+            () => {
+              self.$buefy.toast.open(
+                { type: 'is-danger', message: self.$t('bulkOperationFailed') },
+              );
+            },
+          );
+        },
+      });
+    },
+    confirmBulkUnarchive() {
+      const self = this;
+      const count = this.selectedIds.length;
+      if (count === 0) return;
+      this.$buefy.dialog.confirm({
+        message: this.$t('bulkUnarchiveConfirm', { count }),
+        onConfirm: () => {
+          API.Board.bulkUnarchive(self.selectedIds).then(
+            (resp) => {
+              self.$buefy.toast.open(
+                self.$t('bulkUnarchiveSuccess', { count: resp.data.updated_count }),
+              );
+              self.reset();
+            },
+            () => {
+              self.$buefy.toast.open(
+                { type: 'is-danger', message: self.$t('bulkOperationFailed') },
+              );
+            },
+          );
+        },
+      });
     },
     onPinImageLoaded(itemId) {
       this.blocksMap[itemId].class = {
@@ -271,7 +386,45 @@ $avatar-height: 30px;
 @import './utils/fonts';
 @import './utils/loader.scss';
 
+.selection-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  background-color: #f5f5f5;
+  border-radius: 4px;
+  border: 1px solid #dbdbdb;
+  .selection-info {
+    font-weight: bold;
+    color: #363636;
+  }
+  .selection-actions {
+    display: flex;
+    gap: 8px;
+    .button {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+  }
+}
+
 .board-card{
+  position: relative;
+  &.is-selected {
+    box-shadow: 0 0 0 2px #3273dc;
+    border-radius: 3px;
+  }
+  .select-checkbox {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 10;
+    background: rgba(255,255,255,0.9);
+    padding: 4px;
+    border-radius: 3px;
+  }
   .card-image > img {
     min-width: $pin-preview-width;
     background-color: white;
@@ -286,6 +439,7 @@ $avatar-height: 30px;
   border-radius: 0 0 3px 3px ;
   box-shadow: 0 1px 0 #bbb;
   font-weight: bold;
+  cursor: pointer;
   .description {
     @include secondary-font;
     padding-left: 10px;

@@ -88,5 +88,15 @@
     "boardUnarchiveFailed": "Failed to restore Board",
     "deleteBoardConfirm": "Delete this Board?",
     "activeBoards": "Active",
-    "archivedBoards": "Archived"
+    "archivedBoards": "Archived",
+    "selectAll": "Select all",
+    "clearSelection": "Clear selection",
+    "bulkArchive": "Archive selected",
+    "bulkUnarchive": "Restore selected",
+    "bulkArchiveConfirm": "Archive {count} selected boards?",
+    "bulkUnarchiveConfirm": "Restore {count} selected boards?",
+    "bulkArchiveSuccess": "{count} boards archived",
+    "bulkUnarchiveSuccess": "{count} boards restored",
+    "bulkOperationFailed": "Operation failed",
+    "selectedCount": "{count} selected"
 }

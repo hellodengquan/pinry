@@ -7,7 +7,7 @@ from rest_framework.test import APITestCase
 
 from taggit.models import Tag
 
-from .helpers import create_image, create_user, create_pin
+from .helpers import create_image, create_user, create_pin, TEST_IMAGE_PATH
 from core.models import Pin, Image, Board
 
 
@@ -286,3 +286,334 @@ class PinTests(APITestCase):
         uri = reverse("pin-detail", kwargs={"pk": pin.pk})
         self.client.delete(uri)
         self.assertEqual(Pin.objects.count(), 0)
+
+
+class BoardArchivePermissionTests(APITestCase):
+    """权限矩阵测试：拥有者、其他登录用户、匿名、superuser 访问归档相关端点的边界"""
+
+    def setUp(self):
+        super(BoardArchivePermissionTests, self).setUp()
+        self.owner = create_user("owner")
+        self.other_user = create_user("other")
+        self.superuser = create_user("superuser")
+        self.superuser.is_superuser = True
+        self.superuser.save()
+
+        self.public_board = Board.objects.create(
+            name="public_board",
+            submitter=self.owner,
+            private=False,
+        )
+        self.private_board = Board.objects.create(
+            name="private_board",
+            submitter=self.owner,
+            private=True,
+        )
+        self.archived_public_board = Board.objects.create(
+            name="archived_public",
+            submitter=self.owner,
+            private=False,
+            is_archived=True,
+        )
+        self.archived_private_board = Board.objects.create(
+            name="archived_private",
+            submitter=self.owner,
+            private=True,
+            is_archived=True,
+        )
+
+    def tearDown(self):
+        _teardown_models()
+
+    # ============ archive / unarchive 端点的权限测试 ============
+
+    def test_anonymous_cannot_archive(self):
+        url = reverse("board-archive", kwargs={"pk": self.public_board.pk})
+        resp = self.client.post(url)
+        self.assertEqual(resp.status_code, 401)
+
+    def test_other_user_cannot_archive_others_board(self):
+        self.client.login(username=self.other_user.username, password="password")
+        url = reverse("board-archive", kwargs={"pk": self.public_board.pk})
+        resp = self.client.post(url)
+        self.assertEqual(resp.status_code, 403)
+
+    def test_owner_can_archive_own_board(self):
+        self.client.login(username=self.owner.username, password="password")
+        url = reverse("board-archive", kwargs={"pk": self.public_board.pk})
+        resp = self.client.post(url)
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.public_board.refresh_from_db()
+        self.assertTrue(self.public_board.is_archived)
+        self.assertIsNotNone(self.public_board.archived_at)
+
+    def test_owner_can_unarchive_own_board(self):
+        self.client.login(username=self.owner.username, password="password")
+        url = reverse("board-unarchive", kwargs={"pk": self.archived_public_board.pk})
+        resp = self.client.post(url)
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.archived_public_board.refresh_from_db()
+        self.assertFalse(self.archived_public_board.is_archived)
+        self.assertIsNone(self.archived_public_board.archived_at)
+
+    def test_superuser_cannot_archive_others_board_without_permission(self):
+        self.client.login(username=self.superuser.username, password="password")
+        url = reverse("board-archive", kwargs={"pk": self.public_board.pk})
+        resp = self.client.post(url)
+        self.assertEqual(resp.status_code, 403)
+
+    def test_archive_preserves_pin_membership(self):
+        from django.core.files.images import ImageFile
+        image = Image.objects.create(image=ImageFile(open(TEST_IMAGE_PATH, "rb")))
+        pin = Pin.objects.create(submitter=self.owner, image=image)
+        self.public_board.pins.add(pin)
+        self.public_board.save()
+        pin_count_before = self.public_board.pins.count()
+
+        self.client.login(username=self.owner.username, password="password")
+        url = reverse("board-archive", kwargs={"pk": self.public_board.pk})
+        resp = self.client.post(url)
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.public_board.refresh_from_db()
+        self.assertEqual(self.public_board.pins.count(), pin_count_before)
+        self.assertTrue(self.public_board.pins.filter(id=pin.id).exists())
+
+    # ============ 活跃 Board 列表默认排除已归档 ============
+
+    def test_archived_boards_not_in_active_list_for_owner(self):
+        self.client.login(username=self.owner.username, password="password")
+        url = reverse("board-list")
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        returned_ids = [b["id"] for b in resp.json()["results"]]
+        self.assertIn(self.public_board.id, returned_ids)
+        self.assertIn(self.private_board.id, returned_ids)
+        self.assertNotIn(self.archived_public_board.id, returned_ids)
+        self.assertNotIn(self.archived_private_board.id, returned_ids)
+
+    def test_archived_public_board_not_in_active_list_for_anonymous(self):
+        url = reverse("board-list")
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        returned_ids = [b["id"] for b in resp.json()["results"]]
+        self.assertIn(self.public_board.id, returned_ids)
+        self.assertNotIn(self.archived_public_board.id, returned_ids)
+        self.assertNotIn(self.private_board.id, returned_ids)
+
+    # ============ 归档列表权限矩阵 ============
+
+    def test_anonymous_can_list_archived_public_boards_only(self):
+        url = reverse("archived-board-list")
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        returned_ids = [b["id"] for b in resp.json()["results"]]
+        self.assertIn(self.archived_public_board.id, returned_ids)
+        self.assertNotIn(self.archived_private_board.id, returned_ids)
+        self.assertNotIn(self.public_board.id, returned_ids)
+
+    def test_other_user_can_only_see_archived_public_not_private(self):
+        self.client.login(username=self.other_user.username, password="password")
+        url = reverse("archived-board-list")
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        returned_ids = [b["id"] for b in resp.json()["results"]]
+        self.assertIn(self.archived_public_board.id, returned_ids)
+        self.assertNotIn(self.archived_private_board.id, returned_ids)
+
+    def test_owner_can_see_all_own_archived_boards(self):
+        self.client.login(username=self.owner.username, password="password")
+        url = "{}?submitter__username={}".format(
+            reverse("archived-board-list"), self.owner.username
+        )
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        returned_ids = [b["id"] for b in resp.json()["results"]]
+        self.assertIn(self.archived_public_board.id, returned_ids)
+        self.assertIn(self.archived_private_board.id, returned_ids)
+        self.assertNotIn(self.public_board.id, returned_ids)
+
+    def test_owner_can_retrieve_archived_board_detail(self):
+        self.client.login(username=self.owner.username, password="password")
+        url = reverse("board-detail", kwargs={"pk": self.archived_private_board.pk})
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["id"], self.archived_private_board.id)
+        self.assertTrue(resp.json()["is_archived"])
+
+    def test_non_owner_cannot_retrieve_archived_private_board(self):
+        self.client.login(username=self.other_user.username, password="password")
+        url = reverse("board-detail", kwargs={"pk": self.archived_private_board.pk})
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 404)
+
+
+class BoardArchiveOrderingPaginationTests(APITestCase):
+    """归档列表按时间排序与分页测试"""
+
+    def setUp(self):
+        super(BoardArchiveOrderingPaginationTests, self).setUp()
+        self.owner = create_user("owner")
+        from django.utils import timezone
+        from datetime import timedelta
+
+        base_time = timezone.now()
+        self.b1 = Board.objects.create(
+            name="oldest", submitter=self.owner, is_archived=True
+        )
+        self.b1.archived_at = base_time - timedelta(days=3)
+        self.b1.save()
+        self.b2 = Board.objects.create(
+            name="middle", submitter=self.owner, is_archived=True
+        )
+        self.b2.archived_at = base_time - timedelta(days=2)
+        self.b2.save()
+        self.b3 = Board.objects.create(
+            name="newest", submitter=self.owner, is_archived=True
+        )
+        self.b3.archived_at = base_time - timedelta(days=1)
+        self.b3.save()
+
+    def tearDown(self):
+        _teardown_models()
+
+    def test_archived_list_ordered_by_archived_at_desc(self):
+        self.client.login(username=self.owner.username, password="password")
+        url = reverse("archived-board-list")
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        names = [b["name"] for b in resp.json()["results"]]
+        self.assertEqual(names, ["newest", "middle", "oldest"])
+
+    def test_archived_list_pagination_limit_offset(self):
+        self.client.login(username=self.owner.username, password="password")
+        url = "{}?limit=2&offset=0".format(reverse("archived-board-list"))
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["count"], 3)
+        self.assertEqual(len(data["results"]), 2)
+        self.assertIsNotNone(data["next"])
+        self.assertIsNone(data["previous"])
+
+        url = data["next"].replace("http://testserver", "")
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(len(data["results"]), 1)
+        self.assertIsNone(data["next"])
+
+
+class BoardBulkArchiveTests(APITestCase):
+    """批量归档/恢复接口测试"""
+
+    def setUp(self):
+        super(BoardBulkArchiveTests, self).setUp()
+        self.owner = create_user("owner")
+        self.other_user = create_user("other")
+
+        self.b1 = Board.objects.create(name="b1", submitter=self.owner)
+        self.b2 = Board.objects.create(name="b2", submitter=self.owner)
+        self.b3 = Board.objects.create(name="b3", submitter=self.owner, is_archived=True)
+        self.other_board = Board.objects.create(name="other", submitter=self.other_user)
+
+        self.bulk_archive_url = reverse("board-bulk-archive")
+        self.bulk_unarchive_url = reverse("board-bulk-unarchive")
+
+    def tearDown(self):
+        _teardown_models()
+
+    def test_anonymous_cannot_bulk_archive(self):
+        resp = self.client.post(
+            self.bulk_archive_url,
+            data={"board_ids": [self.b1.id]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 401)
+
+    def test_owner_bulk_archive_multiple_boards(self):
+        self.client.login(username=self.owner.username, password="password")
+        resp = self.client.post(
+            self.bulk_archive_url,
+            data={"board_ids": [self.b1.id, self.b2.id]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()["updated_count"], 2)
+        self.b1.refresh_from_db()
+        self.b2.refresh_from_db()
+        self.assertTrue(self.b1.is_archived)
+        self.assertTrue(self.b2.is_archived)
+
+    def test_owner_bulk_unarchive_multiple_boards(self):
+        self.client.login(username=self.owner.username, password="password")
+        self.b1.is_archived = True
+        self.b1.save()
+        resp = self.client.post(
+            self.bulk_unarchive_url,
+            data={"board_ids": [self.b1.id, self.b3.id]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()["updated_count"], 2)
+        self.b1.refresh_from_db()
+        self.b3.refresh_from_db()
+        self.assertFalse(self.b1.is_archived)
+        self.assertFalse(self.b3.is_archived)
+
+    def test_bulk_archive_ignores_already_archived(self):
+        self.client.login(username=self.owner.username, password="password")
+        resp = self.client.post(
+            self.bulk_archive_url,
+            data={"board_ids": [self.b3.id]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["updated_count"], 0)
+
+    def test_bulk_archive_rejects_others_boards(self):
+        self.client.login(username=self.owner.username, password="password")
+        resp = self.client.post(
+            self.bulk_archive_url,
+            data={"board_ids": [self.other_board.id]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["updated_count"], 0)
+        self.other_board.refresh_from_db()
+        self.assertFalse(self.other_board.is_archived)
+
+    def test_bulk_archive_empty_ids_rejected(self):
+        self.client.login(username=self.owner.username, password="password")
+        resp = self.client.post(
+            self.bulk_archive_url,
+            data={"board_ids": []},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_bulk_archive_missing_ids_rejected(self):
+        self.client.login(username=self.owner.username, password="password")
+        resp = self.client.post(
+            self.bulk_archive_url,
+            data={},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_bulk_archive_preserves_pin_membership(self):
+        from django.core.files.images import ImageFile
+        image = Image.objects.create(image=ImageFile(open(TEST_IMAGE_PATH, "rb")))
+        pin = Pin.objects.create(submitter=self.owner, image=image)
+        self.b1.pins.add(pin)
+        self.b1.save()
+        self.client.login(username=self.owner.username, password="password")
+        resp = self.client.post(
+            self.bulk_archive_url,
+            data={"board_ids": [self.b1.id]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.b1.refresh_from_db()
+        self.assertTrue(self.b1.is_archived)
+        self.assertEqual(self.b1.pins.count(), 1)
+        self.assertTrue(self.b1.pins.filter(id=pin.id).exists())

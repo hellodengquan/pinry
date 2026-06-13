@@ -74,6 +74,14 @@ const Board = {
     const url = `${API_PREFIX}boards/${boardId}/unarchive/`;
     return axios.post(url);
   },
+  bulkArchive(boardIds) {
+    const url = `${API_PREFIX}boards/bulk-archive/`;
+    return axios.post(url, { board_ids: boardIds });
+  },
+  bulkUnarchive(boardIds) {
+    const url = `${API_PREFIX}boards/bulk-unarchive/`;
+    return axios.post(url, { board_ids: boardIds });
+  },
   delete(boardId) {
     const url = `${API_PREFIX}boards/${boardId}/`;
     return axios.delete(url);
