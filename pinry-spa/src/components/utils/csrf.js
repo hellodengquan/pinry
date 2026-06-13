@@ -1,4 +1,6 @@
 import axios from 'axios';
+import API from '../api';
+import bus from './bus';
 
 function getCookie(name) {
   const value = `; ${document.cookie}`;
@@ -15,8 +17,23 @@ function getCSRFToken() {
 }
 
 function csrfSafeMethod(method) {
-  // these HTTP methods do not require CSRF protection
   return (/^(GET|HEAD|OPTIONS|TRACE)$/.test(method));
+}
+
+let _authCleared = false;
+
+function _clearAuthStore() {
+  if (_authCleared) {
+    return;
+  }
+  _authCleared = true;
+  try {
+    localStorage.removeItem(API.User.storageKey);
+  } catch (_err) {
+    // ignore
+  }
+  bus.bus.$emit(bus.events.authChanged);
+  setTimeout(() => { _authCleared = false; }, 2000);
 }
 
 function setUpAxiosCsrfConfig() {
@@ -30,6 +47,17 @@ function setUpAxiosCsrfConfig() {
     },
     (error) => {
       Promise.reject(error);
+    },
+  );
+
+  axios.interceptors.response.use(
+    (response) => response,
+    (error) => {
+      const status = error && error.response && error.response.status;
+      if (status === 401 || status === 403) {
+        _clearAuthStore();
+      }
+      return Promise.reject(error);
     },
   );
 }

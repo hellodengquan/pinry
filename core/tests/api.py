@@ -589,6 +589,41 @@ class PaginatorPermissionCountTests(APITestCase):
         self.assertEqual(resp.json()['count'], 2,
                          "count should revert after logout")
 
+    def test_combined_tag_and_search_count_correct(self):
+        resp = self.client.get(self.pin_list_url, {"tags__name": "pg_tag_x", "search": "pg"})
+        self.assertEqual(resp.json()['count'], 2,
+                         "combined tag + search for anonymous should be 2 public")
+        self.assertEqual(len(resp.json()['results']), 2)
+
+        self.client.login(username=self.owner.username, password='password')
+        resp = self.client.get(self.pin_list_url, {"tags__name": "pg_tag_x", "search": "pg"})
+        self.assertEqual(resp.json()['count'], 3,
+                         "combined tag + search for owner should be 3 (including own private)")
+
+    def test_paginator_handles_no_join(self):
+        resp = self.client.get(self.pin_list_url)
+        data = resp.json()
+        self.assertEqual(data['count'], len(data['results']),
+                         "simple list without JOIN should also have matching count/results")
+
+    def test_paginator_count_no_private_leak_via_submitter_filter(self):
+        resp = self.client.get(self.pin_list_url, {"submitter__username": self.owner.username})
+        data = resp.json()
+        self.assertEqual(data['count'], 1,
+                         "anonymous should only see owner's public pins (1), not the private one")
+        for r in data['results']:
+            self.assertFalse(r['private'],
+                             "anonymous must not receive any private pin via submitter filter")
+
+    def test_paginator_count_submitter_filter_owner(self):
+        self.client.login(username=self.owner.username, password='password')
+        resp = self.client.get(self.pin_list_url, {"submitter__username": self.owner.username})
+        data = resp.json()
+        self.assertEqual(data['count'], 2,
+                         "owner should see both own public and own private pins")
+        ids = {r['id'] for r in data['results']}
+        self.assertEqual(ids, {self.pin_pub_owner.id, self.pin_priv_owner.id})
+
     def test_next_url_reflects_correct_count(self):
         for i in range(70):
             image = create_image()
