@@ -24,6 +24,7 @@ class PinViewSet(viewsets.ModelViewSet):
     serializer_class = api.PinSerializer
     filter_backends = (DjangoFilterBackend, SearchFilter, OrderingFilter)
     filter_fields = ("submitter__username", 'tags__name', "pins__id")
+    search_fields = ("description", )
     ordering_fields = ('-id', )
     ordering = ('-id', )
     permission_classes = [IsOwnerOrReadOnly("submitter"), OwnerOnlyIfPrivate("submitter")]
@@ -31,7 +32,7 @@ class PinViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         query = Pin.objects.all()
         request = self.request
-        return filter_private_pin(request, query)
+        return filter_private_pin(request, query).distinct()
 
 
 class BoardViewSet(viewsets.ModelViewSet):
