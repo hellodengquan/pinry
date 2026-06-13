@@ -93,6 +93,8 @@ class Board(models.Model):
     name = models.CharField(max_length=128, blank=False, null=False)
     private = models.BooleanField(default=False, blank=False)
     pins = models.ManyToManyField("Pin", related_name="pins", blank=True)
+    is_archived = models.BooleanField(default=False, blank=False)
+    archived_at = models.DateTimeField(null=True, blank=True)
 
     published = models.DateTimeField(auto_now_add=True)
 

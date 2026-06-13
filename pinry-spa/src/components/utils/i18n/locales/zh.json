@@ -79,5 +79,14 @@
   "imageSourceLabel": "图片来源",
   "tagsLabel": "标签",
   "descriptionLabel": "描述",
-  "selectBoardLabel": "选择画板"
+  "selectBoardLabel": "选择画板",
+  "archiveBoardConfirm": "确认归档该画板？画板内的 Pin 不会受影响。",
+  "unarchiveBoardConfirm": "确认从归档中恢复该画板？",
+  "boardArchived": "画板已归档",
+  "boardArchiveFailed": "画板归档失败",
+  "boardUnarchived": "画板已恢复",
+  "boardUnarchiveFailed": "画板恢复失败",
+  "deleteBoardConfirm": "确认删除该画板？",
+  "activeBoards": "活跃",
+  "archivedBoards": "已归档"
 }

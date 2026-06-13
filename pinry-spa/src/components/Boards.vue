@@ -76,6 +76,7 @@ function createBoardItem(board) {
   boardItem.id = board.id;
   boardItem.name = board.name;
   boardItem.private = board.private;
+  boardItem.is_archived = board.is_archived;
   boardItem.total_pins = board.total_pins;
   if (previewImage.image.thumbnail.image !== null) {
     boardItem.preview_image_url = pinHandler.escapeUrl(
@@ -206,7 +207,12 @@ export default {
         return;
       }
       let promise;
-      if (this.filters.boardUsername) {
+      if (this.filters.boardUsername && this.filters.showArchived) {
+        promise = API.fetchArchivedBoardForUser(
+          this.filters.boardUsername,
+          this.status.offset,
+        );
+      } else if (this.filters.boardUsername) {
         promise = API.fetchBoardForUser(
           this.filters.boardUsername,
           this.status.offset,

@@ -79,5 +79,14 @@
     "imageSourceLabel": "Image Source",
     "tagsLabel": "Tags",
     "descriptionLabel": "Descripton",
-    "selectBoardLabel": "Select Board"
+    "selectBoardLabel": "Select Board",
+    "archiveBoardConfirm": "Archive this Board? Pins inside will not be affected.",
+    "unarchiveBoardConfirm": "Restore this Board from archive?",
+    "boardArchived": "Board archived",
+    "boardArchiveFailed": "Failed to archive Board",
+    "boardUnarchived": "Board restored",
+    "boardUnarchiveFailed": "Failed to restore Board",
+    "deleteBoardConfirm": "Delete this Board?",
+    "activeBoards": "Active",
+    "archivedBoards": "Archived"
 }

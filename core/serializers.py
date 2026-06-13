@@ -19,11 +19,13 @@ def filter_private_pin(request, query):
     return query.select_related('image', 'submitter')
 
 
-def filter_private_board(request, query):
+def filter_private_board(request, query, include_archived=False):
     if request.user.is_authenticated:
         query = query.exclude(~Q(submitter=request.user), private=True)
     else:
         query = query.exclude(private=True)
+    if not include_archived:
+        query = query.exclude(is_archived=True)
     return query
 
 
@@ -175,6 +177,8 @@ class BoardSerializer(serializers.HyperlinkedModelSerializer):
             "id",
             "name",
             "private",
+            "is_archived",
+            "archived_at",
             "total_pins",
             "cover",
             "published",
@@ -182,7 +186,7 @@ class BoardSerializer(serializers.HyperlinkedModelSerializer):
             "pins_to_add",
             "pins_to_remove",
         )
-        read_only_fields = ('submitter', 'published')
+        read_only_fields = ('submitter', 'published', 'archived_at')
         extra_kwargs = {
             'submitter': {"view_name": "users:user-detail"},
         }

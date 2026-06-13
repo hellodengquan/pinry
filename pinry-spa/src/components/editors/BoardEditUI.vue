@@ -8,6 +8,20 @@
            custom-size="mdi-24px">
          </b-icon>
       </span>
+      <span class="icon-container" @click="toggleArchive" v-if="!board.is_archived">
+         <b-icon
+           type="is-light"
+           icon="archive"
+           custom-size="mdi-24px">
+         </b-icon>
+      </span>
+      <span class="icon-container" @click="toggleArchive" v-else>
+         <b-icon
+           type="is-light"
+           icon="unarchive"
+           custom-size="mdi-24px">
+         </b-icon>
+      </span>
       <span class="icon-container" @click="editBoard">
        <b-icon
          type="is-light"
@@ -45,9 +59,47 @@ export default {
         this.onBoardSaved,
       );
     },
+    toggleArchive() {
+      const self = this;
+      if (this.board.is_archived) {
+        this.$buefy.dialog.confirm({
+          message: this.$t('unarchiveBoardConfirm'),
+          onConfirm: () => {
+            API.Board.unarchive(self.board.id).then(
+              () => {
+                self.$buefy.toast.open(self.$t('boardUnarchived'));
+                self.$emit('board-save-succeed', self.board.id);
+              },
+              () => {
+                self.$buefy.toast.open(
+                  { type: 'is-danger', message: self.$t('boardUnarchiveFailed') },
+                );
+              },
+            );
+          },
+        });
+      } else {
+        this.$buefy.dialog.confirm({
+          message: this.$t('archiveBoardConfirm'),
+          onConfirm: () => {
+            API.Board.archive(self.board.id).then(
+              () => {
+                self.$buefy.toast.open(self.$t('boardArchived'));
+                self.$emit('board-save-succeed', self.board.id);
+              },
+              () => {
+                self.$buefy.toast.open(
+                  { type: 'is-danger', message: self.$t('boardArchiveFailed') },
+                );
+              },
+            );
+          },
+        });
+      }
+    },
     deleteBoard() {
       this.$buefy.dialog.confirm({
-        message: 'Delete this Board?',
+        message: this.$t('deleteBoardConfirm'),
         onConfirm: () => {
           API.Board.delete(this.board.id).then(
             () => {

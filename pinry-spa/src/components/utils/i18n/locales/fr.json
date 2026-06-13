@@ -79,5 +79,14 @@
     "imageSourceLabel": "Source de l'image",
     "tagsLabel": "Tags",
     "descriptionLabel": "Description",
-    "selectBoardLabel": "Selectionner un tableau"
+    "selectBoardLabel": "Selectionner un tableau",
+    "archiveBoardConfirm": "Archiver ce tableau ? Les fiches à l'intérieur ne seront pas affectées.",
+    "unarchiveBoardConfirm": "Restaurer ce tableau depuis les archives ?",
+    "boardArchived": "Tableau archivé",
+    "boardArchiveFailed": "Échec de l'archivage du tableau",
+    "boardUnarchived": "Tableau restauré",
+    "boardUnarchiveFailed": "Échec de la restauration du tableau",
+    "deleteBoardConfirm": "Supprimer ce tableau ?",
+    "activeBoards": "Actifs",
+    "archivedBoards": "Archivés"
 }

@@ -40,6 +40,11 @@ const Board = {
     const url = `${prefix}&offset=${offset}&limit=${limit}`;
     return axios.get(url);
   },
+  fetchArchivedList(username, offset = 0, limit = 50) {
+    const prefix = `${API_PREFIX}archived-boards/?submitter__username=${username}`;
+    const url = `${prefix}&offset=${offset}&limit=${limit}`;
+    return axios.get(url);
+  },
   saveChanges(boardId, fieldsForm) {
     const url = `${API_PREFIX}boards/${boardId}/`;
     return axios.patch(
@@ -60,6 +65,14 @@ const Board = {
       url,
       { pins_to_remove: pinIds },
     );
+  },
+  archive(boardId) {
+    const url = `${API_PREFIX}boards/${boardId}/archive/`;
+    return axios.post(url);
+  },
+  unarchive(boardId) {
+    const url = `${API_PREFIX}boards/${boardId}/unarchive/`;
+    return axios.post(url);
   },
   delete(boardId) {
     const url = `${API_PREFIX}boards/${boardId}/`;
@@ -154,6 +167,10 @@ function fetchBoardForUser(username, offset = 0, limit = 50) {
   const prefix = `${API_PREFIX}boards/?submitter__username=${username}`;
   const url = `${prefix}&offset=${offset}&limit=${limit}`;
   return axios.get(url);
+}
+
+function fetchArchivedBoardForUser(username, offset = 0, limit = 50) {
+  return API.Board.fetchArchivedList(username, offset, limit);
 }
 
 const User = {
@@ -286,5 +303,6 @@ export default {
   fetchPin,
   fetchPins,
   fetchBoardForUser,
+  fetchArchivedBoardForUser,
   User,
 };
