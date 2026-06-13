@@ -129,5 +129,7 @@
     "errorTypeHttp4xx": "HTTP 4xx",
     "errorTypeHttp5xx": "HTTP 5xx",
     "errorTypeUnknown": "Unknown Error",
-    "errorTypeFilterLabel": "Filter by error type"
+    "errorTypeFilterLabel": "Filter by error type",
+    "linkCheckCancelTask": "Stop Scan",
+    "linkCheckTaskCancelled": "Cancelled"
 }

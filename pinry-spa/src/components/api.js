@@ -311,6 +311,10 @@ const LinkCheckTask = {
     const url = `${API_PREFIX}link-check-tasks/${taskId}/`;
     return axios.get(url);
   },
+  cancel(taskId) {
+    const url = `${API_PREFIX}link-check-tasks/${taskId}/cancel/`;
+    return axios.post(url);
+  },
 };
 
 export default {

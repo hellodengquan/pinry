@@ -20,13 +20,21 @@
                   {{ $t("linkCheckStartButton") }}
                 </button>
               </p>
+              <p v-if="runningTask" class="control">
+                <button
+                  class="button is-danger is-light"
+                  @click="cancelTask"
+                >
+                  <i class="fa fa-stop mr-1"></i>{{ $t("linkCheckCancelTask") }}
+                </button>
+              </p>
             </div>
 
             <div v-if="runningTask" class="box has-background-info-light" style="clear: both; margin-top: 1rem;">
               <div class="columns is-vcentered">
                 <div class="column is-8">
                   <p class="is-size-5 has-text-weight-semibold">
-                    {{ statusLabel(runningTask.status) }}
+                    {{ taskStatusLabel(runningTask.status) }}
                     <span v-if="runningTask.status === 'running'" class="tag is-info is-light ml-2">
                       {{ runningTask.progress_percent }}%
                     </span>
@@ -40,7 +48,11 @@
                 </div>
                 <div class="column is-4">
                   <progress
-                    class="progress is-primary"
+                    class="progress"
+                    :class="{
+                      'is-primary': runningTask.status === 'running',
+                      'is-warning': runningTask.status === 'pending',
+                    }"
                     :value="runningTask.progress_percent"
                     max="100"
                   >{{ runningTask.progress_percent }}%</progress>
@@ -75,132 +87,29 @@
 
             <!-- Todo Tab -->
             <div v-if="activeTab === 'todo'">
-              <div class="field is-grouped is-grouped-multiline mb-4">
-                <p class="control">
-                  <span class="is-size-7 has-text-grey mr-2" style="line-height: 2.25;">
-                    {{ $t("errorTypeFilterLabel") }}:
-                  </span>
-                </p>
-                <p class="control" v-for="opt in errorTypeOptions" :key="'ft-' + opt.key">
-                  <button
-                    class="button is-small"
-                    :class="{ 'is-info': todoErrorType === opt.value }"
-                    @click="todoErrorType = opt.value; onTodoErrorTypeChange();"
-                  >
-                    <span>{{ $t(opt.labelKey) }}</span>
-                    <span
-                      v-if="opt.value === '' && todoStats.total > 0"
-                      class="tag is-dark is-light ml-1"
-                    >{{ todoStats.total }}</span>
-                    <span
-                      v-else-if="opt.value !== '' && errorTypeCount(opt.value) > 0"
-                      class="tag is-dark is-light ml-1"
-                    >{{ errorTypeCount(opt.value) }}</span>
-                  </button>
-                </p>
-              </div>
-              <div v-if="loadingTodo" class="has-text-centered py-6">
-                <i class="fa fa-spinner fa-spin is-size-3"></i>
-              </div>
-              <div v-else-if="todoList.length === 0" class="notification is-success is-light has-text-centered py-6">
-                <i class="fa fa-check-circle is-size-3 mr-2"></i>
-                {{ $t("linkCheckEmptyTodo") }}
-              </div>
-              <div v-else class="checks-list">
-                <div
-                  v-for="item in todoList"
-                  :key="'todo-' + item.id"
-                  class="card check-card"
-                >
-                  <div class="card-content">
-                    <div class="columns">
-                      <div class="column is-2">
-                        <figure class="image is-4by3">
-                          <img
-                            v-if="item.pin_detail && item.pin_detail.image && item.pin_detail.image.square"
-                            :src="item.pin_detail.image.square.image"
-                            alt="pin thumbnail"
-                          >
-                        </figure>
-                      </div>
-                      <div class="column is-10">
-                        <div class="is-flex is-justify-content-space-between is-align-items-flex-start">
-                          <div>
-                            <p class="is-size-5 has-text-weight-semibold">
-                              <router-link
-                                v-if="item.pin_detail"
-                                :to="{ name: 'pin', params: { pinId: item.pin } }"
-                              >
-                                Pin #{{ item.pin }}
-                              </router-link>
-                              <span v-else>Pin #{{ item.pin }}</span>
-                              <span class="tag is-danger is-light ml-2">{{ statusLabel(item.status) }}</span>
-                              <span v-if="item.error_type" class="tag ml-1" :class="errorTypeTagClass(item.error_type)">
-                                {{ errorTypeLabel(item.error_type) }}
-                              </span>
-                              <span class="tag is-warning is-light ml-1">{{ actionLabel(item.action_status) }}</span>
-                            </p>
-                            <p class="is-size-7 has-text-grey mt-1">
-                              <span class="mr-3">{{ $t("linkCheckHttpStatus") }}: <strong>{{ item.http_status_code || 'N/A' }}</strong></span>
-                              <span class="mr-3">{{ $t("linkCheckResponseTime") }}: <strong>{{ item.response_time_ms || 'N/A' }}</strong></span>
-                              <span>{{ $t("linkCheckCheckedAt") }}: <strong>{{ formatDate(item.checked_at) }}</strong></span>
-                            </p>
-                            <p class="is-size-6 mt-2 break-all">
-                              <a :href="item.url" target="_blank" rel="noopener noreferrer">
-                                <i class="fa fa-external-link mr-1"></i>{{ item.url }}
-                              </a>
-                            </p>
-                            <p v-if="item.error_message" class="is-size-6 has-text-danger mt-2">
-                              <i class="fa fa-exclamation-triangle mr-1"></i>
-                              <strong>{{ $t("linkCheckErrorMessage") }}:</strong> {{ item.error_message }}
-                            </p>
-                            <p v-if="item.pin_detail && item.pin_detail.description" class="is-size-6 mt-2">
-                              {{ item.pin_detail.description }}
-                            </p>
-                          </div>
-                        </div>
-                        <div class="field is-grouped is-grouped-multiline mt-4">
-                          <p class="control">
-                            <button class="button is-small is-warning" @click="openSource(item)">
-                              <i class="fa fa-external-link mr-1"></i>{{ $t("linkCheckSourceLink") }}
-                            </button>
-                          </p>
-                          <p class="control">
-                            <button
-                              class="button is-small is-info"
-                              :class="{ 'is-loading': recheckingId === item.id }"
-                              :disabled="recheckingId === item.id"
-                              @click="doRecheck(item)"
-                            >
-                              <i class="fa fa-refresh mr-1"></i>{{ $t("linkCheckActionButtonRecheck") }}
-                            </button>
-                          </p>
-                          <p class="control">
-                            <button class="button is-small" @click="doAction(item, 'ignore')">
-                              <i class="fa fa-eye-slash mr-1"></i>{{ $t("linkCheckActionButtonIgnore") }}
-                            </button>
-                          </p>
-                          <p class="control">
-                            <button class="button is-small is-success" @click="doAction(item, 'fixed')">
-                              <i class="fa fa-wrench mr-1"></i>{{ $t("linkCheckActionButtonFixed") }}
-                            </button>
-                          </p>
-                          <p class="control">
-                            <button class="button is-small is-primary" @click="doAction(item, 'handled')">
-                              <i class="fa fa-check mr-1"></i>{{ $t("linkCheckActionButtonHandled") }}
-                            </button>
-                          </p>
-                          <p class="control">
-                            <button class="button is-small is-danger" @click="confirmDelete(item)">
-                              <i class="fa fa-trash mr-1"></i>{{ $t("linkCheckActionButtonDelete") }}
-                            </button>
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <LinkCheckFilterBar
+                v-model="todoErrorType"
+                :options="errorTypeOptions"
+                :total-count="todoStats.total"
+                :type-stats="todoStats.byType"
+                @input="onTodoErrorTypeChange"
+              />
+              <LinkCheckTable
+                :items="todoList"
+                :loading="loadingTodo"
+                :rechecking-id="recheckingId"
+                prefix="todo-"
+                @open-source="openSource"
+                @recheck="doRecheck"
+                @action="doAction"
+                @confirm-delete="confirmDelete"
+              />
+              <LinkCheckPagination
+                :total-count="todoStats.total"
+                :current-page="todoPage"
+                :page-size="pageSize"
+                @page-change="onTodoPageChange"
+              />
             </div>
 
             <!-- Tasks Tab -->
@@ -224,6 +133,7 @@
                       <th>{{ $t("linkCheckProgress") }}</th>
                       <th>Created</th>
                       <th>Completed</th>
+                      <th></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -237,26 +147,34 @@
                             'is-info': task.status === 'running',
                             'is-success': task.status === 'completed',
                             'is-danger': task.status === 'failed',
+                            'is-dark': task.status === 'cancelled',
                           }"
-                        >{{ statusLabel(task.status) }}</span>
+                        >{{ taskStatusLabel(task.status) }}</span>
                       </td>
                       <td>{{ task.total_pins }}</td>
                       <td>{{ task.checked_count }}</td>
                       <td><span class="has-text-success">{{ task.success_count }}</span></td>
                       <td><span class="has-text-danger">{{ task.failed_count }}</span></td>
                       <td>
-                        <div class="field">
-                          <progress
-                            class="progress is-small is-primary"
-                            :value="task.progress_percent"
-                            max="100"
-                            style="min-width: 80px;"
-                          >{{ task.progress_percent }}%</progress>
-                        </div>
+                        <progress
+                          class="progress is-small is-primary"
+                          :value="task.progress_percent"
+                          max="100"
+                          style="min-width: 80px;"
+                        >{{ task.progress_percent }}%</progress>
                         <span class="is-size-7">{{ task.progress_percent }}%</span>
                       </td>
                       <td class="is-size-7">{{ formatDate(task.created_at) }}</td>
                       <td class="is-size-7">{{ formatDate(task.completed_at) }}</td>
+                      <td>
+                        <button
+                          v-if="task.status === 'running' || task.status === 'pending'"
+                          class="button is-small is-danger is-light"
+                          @click="cancelTaskById(task.id)"
+                        >
+                          <i class="fa fa-stop"></i>
+                        </button>
+                      </td>
                     </tr>
                   </tbody>
                 </table>
@@ -265,136 +183,31 @@
 
             <!-- All Checks Tab -->
             <div v-if="activeTab === 'all'">
-              <div class="field is-grouped is-grouped-multiline mb-4">
-                <p class="control">
-                  <span class="is-size-7 has-text-grey mr-2" style="line-height: 2.25;">
-                    {{ $t("errorTypeFilterLabel") }}:
-                  </span>
-                </p>
-                <p class="control" v-for="opt in errorTypeOptions" :key="'fa-' + opt.key">
-                  <button
-                    class="button is-small"
-                    :class="{ 'is-info': allErrorType === opt.value }"
-                    @click="allErrorType = opt.value; onAllErrorTypeChange();"
-                  >
-                    <span>{{ $t(opt.labelKey) }}</span>
-                  </button>
-                </p>
-              </div>
-              <div v-if="loadingAll" class="has-text-centered py-6">
-                <i class="fa fa-spinner fa-spin is-size-3"></i>
-              </div>
-              <div v-else-if="allList.length === 0" class="notification is-info is-light has-text-centered py-6">
-                {{ $t("linkCheckEmptyHistory") }}
-              </div>
-              <div v-else class="checks-list">
-                <div
-                  v-for="item in allList"
-                  :key="'all-' + item.id"
-                  class="card check-card"
-                >
-                  <div class="card-content">
-                    <div class="columns">
-                      <div class="column is-2">
-                        <figure class="image is-4by3">
-                          <img
-                            v-if="item.pin_detail && item.pin_detail.image && item.pin_detail.image.square"
-                            :src="item.pin_detail.image.square.image"
-                            alt="pin thumbnail"
-                          >
-                        </figure>
-                      </div>
-                      <div class="column is-10">
-                        <div class="is-flex is-justify-content-space-between is-align-items-flex-start">
-                          <div>
-                            <p class="is-size-5 has-text-weight-semibold">
-                              <router-link
-                                v-if="item.pin_detail"
-                                :to="{ name: 'pin', params: { pinId: item.pin } }"
-                              >
-                                Pin #{{ item.pin }}
-                              </router-link>
-                              <span v-else>Pin #{{ item.pin }}</span>
-                              <span
-                                class="tag ml-2"
-                                :class="{
-                                  'is-warning is-light': item.status === 'pending',
-                                  'is-info is-light': item.status === 'running',
-                                  'is-success is-light': item.status === 'success',
-                                  'is-danger is-light': item.status === 'failed',
-                                }"
-                              >{{ statusLabel(item.status) }}</span>
-                              <span v-if="item.error_type" class="tag ml-1" :class="errorTypeTagClass(item.error_type)">
-                                {{ errorTypeLabel(item.error_type) }}
-                              </span>
-                              <span
-                                class="tag ml-1"
-                                :class="{
-                                  'is-warning is-light': item.action_status === 'unhandled',
-                                  'is-dark is-light': item.action_status === 'ignored',
-                                  'is-success is-light': item.action_status === 'fixed',
-                                  'is-danger is-light': item.action_status === 'deleted',
-                                  'is-primary is-light': item.action_status === 'handled',
-                                }"
-                              >{{ actionLabel(item.action_status) }}</span>
-                            </p>
-                            <p class="is-size-7 has-text-grey mt-1">
-                              <span class="mr-3">{{ $t("linkCheckHttpStatus") }}: <strong>{{ item.http_status_code || 'N/A' }}</strong></span>
-                              <span class="mr-3">{{ $t("linkCheckResponseTime") }}: <strong>{{ item.response_time_ms || 'N/A' }}</strong></span>
-                              <span>{{ $t("linkCheckCheckedAt") }}: <strong>{{ formatDate(item.checked_at) }}</strong></span>
-                            </p>
-                            <p class="is-size-6 mt-2 break-all">
-                              <a :href="item.url" target="_blank" rel="noopener noreferrer">
-                                <i class="fa fa-external-link mr-1"></i>{{ item.url }}
-                              </a>
-                            </p>
-                            <p v-if="item.error_message" class="is-size-6 has-text-danger mt-2">
-                              <i class="fa fa-exclamation-triangle mr-1"></i>
-                              <strong>{{ $t("linkCheckErrorMessage") }}:</strong> {{ item.error_message }}
-                            </p>
-                            <p v-if="item.action_note" class="is-size-6 has-text-info mt-2">
-                              <i class="fa fa-sticky-note mr-1"></i>
-                              <strong>Note:</strong> {{ item.action_note }}
-                            </p>
-                          </div>
-                        </div>
-                        <div v-if="item.status === 'failed' && item.action_status === 'unhandled'" class="field is-grouped is-grouped-multiline mt-4">
-                          <p class="control">
-                            <button class="button is-small is-warning" @click="openSource(item)">
-                              <i class="fa fa-external-link mr-1"></i>{{ $t("linkCheckSourceLink") }}
-                            </button>
-                          </p>
-                          <p class="control">
-                            <button
-                              class="button is-small is-info"
-                              :class="{ 'is-loading': recheckingId === item.id }"
-                              :disabled="recheckingId === item.id"
-                              @click="doRecheck(item)"
-                            >
-                              <i class="fa fa-refresh mr-1"></i>{{ $t("linkCheckActionButtonRecheck") }}
-                            </button>
-                          </p>
-                          <p class="control">
-                            <button class="button is-small" @click="doAction(item, 'ignore')">
-                              <i class="fa fa-eye-slash mr-1"></i>{{ $t("linkCheckActionButtonIgnore") }}
-                            </button>
-                          </p>
-                          <p class="control">
-                            <button class="button is-small is-success" @click="doAction(item, 'fixed')">
-                              <i class="fa fa-wrench mr-1"></i>{{ $t("linkCheckActionButtonFixed") }}
-                            </button>
-                          </p>
-                          <p class="control">
-                            <button class="button is-small is-danger" @click="confirmDelete(item)">
-                              <i class="fa fa-trash mr-1"></i>{{ $t("linkCheckActionButtonDelete") }}
-                            </button>
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <LinkCheckFilterBar
+                v-model="allErrorType"
+                :options="errorTypeOptions"
+                :total-count="0"
+                :type-stats="[]"
+                @input="onAllErrorTypeChange"
+              />
+              <LinkCheckTable
+                :items="allList"
+                :loading="loadingAll"
+                :rechecking-id="recheckingId"
+                prefix="all-"
+                :show-all-actions="true"
+                :empty-text="$t('linkCheckEmptyHistory')"
+                @open-source="openSource"
+                @recheck="doRecheck"
+                @action="doAction"
+                @confirm-delete="confirmDelete"
+              />
+              <LinkCheckPagination
+                :total-count="allTotal"
+                :current-page="allPage"
+                :page-size="pageSize"
+                @page-change="onAllPageChange"
+              />
             </div>
 
           </div>
@@ -406,7 +219,22 @@
 
 <script>
 import PHeader from '../components/PHeader.vue';
+import LinkCheckFilterBar from '../components/link-check/LinkCheckFilterBar.vue';
+import LinkCheckTable from '../components/link-check/LinkCheckTable.vue';
+import LinkCheckPagination from '../components/link-check/LinkCheckPagination.vue';
 import api from '../components/api';
+
+const ERROR_TYPE_OPTIONS = [
+  { value: '', key: 'all', labelKey: 'errorTypeAll' },
+  { value: 'connection_refused', key: 'connection_refused', labelKey: 'errorTypeConnectionRefused' },
+  { value: 'dns_error', key: 'dns_error', labelKey: 'errorTypeDnsError' },
+  { value: 'timeout', key: 'timeout', labelKey: 'errorTypeTimeout' },
+  { value: 'too_many_redirects', key: 'too_many_redirects', labelKey: 'errorTypeTooManyRedirects' },
+  { value: 'ssl_error', key: 'ssl_error', labelKey: 'errorTypeSslError' },
+  { value: 'http_4xx', key: 'http_4xx', labelKey: 'errorTypeHttp4xx' },
+  { value: 'http_5xx', key: 'http_5xx', labelKey: 'errorTypeHttp5xx' },
+  { value: 'unknown', key: 'unknown', labelKey: 'errorTypeUnknown' },
+];
 
 export default {
   name: 'LinkCheck',
@@ -424,24 +252,21 @@ export default {
       todoStats: { total: 0, byType: [] },
       taskList: [],
       allList: [],
+      allTotal: 0,
       pollTimer: null,
       todoErrorType: '',
       allErrorType: '',
-      errorTypeOptions: [
-        { value: '', key: 'all', labelKey: 'errorTypeAll' },
-        { value: 'connection_refused', key: 'connection_refused', labelKey: 'errorTypeConnectionRefused' },
-        { value: 'dns_error', key: 'dns_error', labelKey: 'errorTypeDnsError' },
-        { value: 'timeout', key: 'timeout', labelKey: 'errorTypeTimeout' },
-        { value: 'too_many_redirects', key: 'too_many_redirects', labelKey: 'errorTypeTooManyRedirects' },
-        { value: 'ssl_error', key: 'ssl_error', labelKey: 'errorTypeSslError' },
-        { value: 'http_4xx', key: 'http_4xx', labelKey: 'errorTypeHttp4xx' },
-        { value: 'http_5xx', key: 'http_5xx', labelKey: 'errorTypeHttp5xx' },
-        { value: 'unknown', key: 'unknown', labelKey: 'errorTypeUnknown' },
-      ],
+      errorTypeOptions: ERROR_TYPE_OPTIONS,
+      pageSize: 20,
+      todoPage: 1,
+      allPage: 1,
     };
   },
   components: {
     PHeader,
+    LinkCheckFilterBar,
+    LinkCheckTable,
+    LinkCheckPagination,
   },
   beforeMount() {
     this.initializeUser();
@@ -450,22 +275,16 @@ export default {
     this.loadInitialData();
   },
   beforeDestroy() {
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
-    }
+    this.stopPolling();
   },
   methods: {
     initializeUser() {
-      const self = this;
-      api.User.fetchUserInfo().then(
-        (user) => {
-          if (user !== null) {
-            self.user.meta = user;
-            self.user.loggedIn = true;
-          }
-        },
-      );
+      api.User.fetchUserInfo().then((user) => {
+        if (user !== null) {
+          this.user.meta = user;
+          this.user.loggedIn = true;
+        }
+      });
     },
     setTab(tab) {
       this.activeTab = tab;
@@ -481,6 +300,8 @@ export default {
       this.loadTodoList();
       this.detectRunningTask();
     },
+
+    // ---- Todo ----
     async loadTodoList() {
       this.loadingTodo = true;
       try {
@@ -488,7 +309,8 @@ export default {
           status: 'failed',
           action_status: 'unhandled',
           latest: true,
-          limit: 100,
+          limit: this.pageSize,
+          offset: (this.todoPage - 1) * this.pageSize,
         };
         if (this.todoErrorType) {
           params.error_type = this.todoErrorType;
@@ -515,11 +337,15 @@ export default {
       }
     },
     onTodoErrorTypeChange() {
+      this.todoPage = 1;
       this.loadTodoList();
     },
-    onAllErrorTypeChange() {
-      this.loadAllList();
+    onTodoPageChange(page) {
+      this.todoPage = page;
+      this.loadTodoList();
     },
+
+    // ---- Tasks ----
     async loadTaskList() {
       this.loadingTasks = true;
       try {
@@ -531,21 +357,38 @@ export default {
         this.loadingTasks = false;
       }
     },
+
+    // ---- All Checks ----
     async loadAllList() {
       this.loadingAll = true;
       try {
-        const params = { latest: true, limit: 100 };
+        const params = {
+          latest: true,
+          limit: this.pageSize,
+          offset: (this.allPage - 1) * this.pageSize,
+        };
         if (this.allErrorType) {
           params.error_type = this.allErrorType;
         }
         const resp = await api.LinkCheck.fetchList(params);
         this.allList = resp.data.results || [];
+        this.allTotal = resp.data.count || 0;
       } catch (e) {
         console.error('Failed to load all list', e);
       } finally {
         this.loadingAll = false;
       }
     },
+    onAllErrorTypeChange() {
+      this.allPage = 1;
+      this.loadAllList();
+    },
+    onAllPageChange(page) {
+      this.allPage = page;
+      this.loadAllList();
+    },
+
+    // ---- Task Lifecycle ----
     async detectRunningTask() {
       try {
         const resp = await api.LinkCheckTask.fetchList({ status: 'running', limit: 1 });
@@ -573,6 +416,25 @@ export default {
         this.startingTask = false;
       }
     },
+    async cancelTask() {
+      if (!this.runningTask) return;
+      await this.cancelTaskById(this.runningTask.id);
+    },
+    async cancelTaskById(taskId) {
+      try {
+        await api.LinkCheckTask.cancel(taskId);
+        if (this.runningTask && this.runningTask.id === taskId) {
+          this.runningTask = null;
+          this.stopPolling();
+        }
+        this.loadTodoList();
+        if (this.activeTab === 'tasks') {
+          this.loadTaskList();
+        }
+      } catch (e) {
+        console.error('Failed to cancel task', e);
+      }
+    },
     startPolling() {
       if (this.pollTimer) return;
       this.pollTimer = setInterval(() => this.pollRunningTask(), 3000);
@@ -593,6 +455,7 @@ export default {
         this.runningTask = resp.data;
         if (resp.data.status !== 'running' && resp.data.status !== 'pending') {
           this.stopPolling();
+          this.runningTask = null;
           this.loadTodoList();
           if (this.activeTab === 'tasks') {
             this.loadTaskList();
@@ -602,6 +465,8 @@ export default {
         console.error(e);
       }
     },
+
+    // ---- Actions ----
     async doRecheck(item) {
       this.recheckingId = item.id;
       try {
@@ -616,7 +481,7 @@ export default {
           }
         }
         if (this.activeTab === 'all') {
-          this.allList.unshift(resp.data);
+          this.loadAllList();
         }
       } catch (e) {
         console.error(e);
@@ -648,63 +513,23 @@ export default {
         window.open(item.url, '_blank');
       }
     },
+
+    // ---- Formatting ----
     formatDate(dt) {
       if (!dt) return '—';
       const d = new Date(dt);
       if (isNaN(d.getTime())) return dt;
       return d.toLocaleString();
     },
-    statusLabel(s) {
+    taskStatusLabel(s) {
       const map = {
-        pending: this.$t("linkCheckStatusPending"),
-        running: this.$t("linkCheckStatusRunning"),
-        success: this.$t("linkCheckStatusSuccess"),
-        failed: this.$t("linkCheckStatusFailed"),
+        pending: this.$t("linkCheckTaskPending"),
+        running: this.$t("linkCheckTaskRunning"),
         completed: this.$t("linkCheckTaskCompleted"),
+        failed: this.$t("linkCheckTaskFailed"),
+        cancelled: this.$t("linkCheckTaskCancelled"),
       };
       return map[s] || s;
-    },
-    actionLabel(a) {
-      const map = {
-        unhandled: this.$t("linkCheckActionUnhandled"),
-        ignored: this.$t("linkCheckActionIgnored"),
-        fixed: this.$t("linkCheckActionFixed"),
-        deleted: this.$t("linkCheckActionDeleted"),
-        handled: this.$t("linkCheckActionHandled"),
-      };
-      return map[a] || a;
-    },
-    errorTypeLabel(t) {
-      if (!t) return '';
-      const map = {
-        connection_refused: this.$t("errorTypeConnectionRefused"),
-        dns_error: this.$t("errorTypeDnsError"),
-        timeout: this.$t("errorTypeTimeout"),
-        too_many_redirects: this.$t("errorTypeTooManyRedirects"),
-        ssl_error: this.$t("errorTypeSslError"),
-        http_4xx: this.$t("errorTypeHttp4xx"),
-        http_5xx: this.$t("errorTypeHttp5xx"),
-        unknown: this.$t("errorTypeUnknown"),
-      };
-      return map[t] || t;
-    },
-    errorTypeTagClass(t) {
-      if (!t) return 'is-light';
-      const map = {
-        connection_refused: 'is-danger is-light',
-        dns_error: 'is-warning is-light',
-        timeout: 'is-info is-light',
-        too_many_redirects: 'is-link is-light',
-        ssl_error: 'is-danger is-light',
-        http_4xx: 'is-warning is-light',
-        http_5xx: 'is-danger is-light',
-        unknown: 'is-light',
-      };
-      return map[t] || 'is-light';
-    },
-    errorTypeCount(t) {
-      const stat = this.todoStats.byType.find(s => s.error_type === t);
-      return stat ? stat.count : 0;
     },
   },
 };
@@ -714,17 +539,5 @@ export default {
 .link-check-page {
   min-height: 100vh;
   background: #fafafa;
-
-  .check-card {
-    margin-bottom: 1rem;
-    transition: box-shadow 0.2s;
-    &:hover {
-      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-    }
-  }
-
-  .break-all {
-    word-break: break-all;
-  }
 }
 </style>

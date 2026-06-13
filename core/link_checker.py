@@ -272,6 +272,9 @@ def run_link_check_task(task_id: int):
     if task.status == LinkCheckTask.Status.COMPLETED:
         logger.warning("LinkCheckTask %s already completed, skipping", task_id)
         return
+    if task.status == LinkCheckTask.Status.CANCELLED:
+        logger.warning("LinkCheckTask %s already cancelled, skipping", task_id)
+        return
 
     task.status = LinkCheckTask.Status.RUNNING
     task.started_at = timezone.now()
@@ -287,6 +290,15 @@ def run_link_check_task(task_id: int):
         error_counts = defaultdict(int)
 
         for check in checks:
+            task.refresh_from_db(fields=["status"])
+            if task.status == LinkCheckTask.Status.CANCELLED:
+                LinkCheck.objects.filter(
+                    status=LinkCheck.Status.PENDING,
+                    pin__in=[c.pin_id for c in checks],
+                ).update(status=LinkCheck.Status.PENDING)
+                logger.info("LinkCheckTask %s cancelled at check %s/%s", task_id, task.checked_count, task.total_pins)
+                return {"task_id": task_id, "cancelled": True}
+
             check.status = LinkCheck.Status.RUNNING
             check.save(update_fields=["status"])
 

@@ -215,7 +215,9 @@ class LinkCheckTaskViewSet(viewsets.ReadOnlyModelViewSet):
         task = LinkCheckTask.objects.create(submitter=request.user)
 
         if CELERY_AVAILABLE:
-            celery_run_link_check_task.delay(task.id)
+            result = celery_run_link_check_task.delay(task.id)
+            task.celery_task_id = result.id
+            task.save(update_fields=["celery_task_id"])
         else:
             from .link_checker import run_link_check_task as sync_run_task
             import threading
@@ -232,6 +234,39 @@ class LinkCheckTaskViewSet(viewsets.ReadOnlyModelViewSet):
             api.LinkCheckTaskSerializer(task).data,
             status=status.HTTP_201_CREATED,
         )
+
+    @action(detail=True, methods=["post"], url_path="cancel")
+    def cancel_task(self, request, pk=None):
+        task = self.get_object()
+        if not request.user.is_superuser and task.submitter != request.user:
+            return Response(
+                {"detail": "permission denied"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if task.status not in (LinkCheckTask.Status.PENDING, LinkCheckTask.Status.RUNNING):
+            return Response(
+                {"detail": "task cannot be cancelled in current status"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        task.status = LinkCheckTask.Status.CANCELLED
+        task.completed_at = timezone.now()
+        task.save(update_fields=["status", "completed_at"])
+
+        if CELERY_AVAILABLE and task.celery_task_id:
+            try:
+                from pinry.celery import app as celery_app
+
+                celery_app.control.revoke(
+                    task.celery_task_id,
+                    terminate=True,
+                    signal="SIGTERM",
+                )
+            except Exception:
+                pass
+
+        return Response(api.LinkCheckTaskSerializer(task).data)
 
 
 drf_router = routers.DefaultRouter()

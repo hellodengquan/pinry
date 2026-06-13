@@ -184,15 +184,18 @@ class LinkCheckTask(models.Model):
         RUNNING = "running"
         COMPLETED = "completed"
         FAILED = "failed"
+        CANCELLED = "cancelled"
         CHOICES = (
             (PENDING, "待执行"),
             (RUNNING, "执行中"),
             (COMPLETED, "已完成"),
             (FAILED, "失败"),
+            (CANCELLED, "已取消"),
         )
 
     submitter = models.ForeignKey(User, on_delete=models.CASCADE)
     status = models.CharField(max_length=16, choices=Status.CHOICES, default=Status.PENDING)
+    celery_task_id = models.CharField(max_length=256, null=True, blank=True)
     total_pins = models.IntegerField(default=0)
     checked_count = models.IntegerField(default=0)
     failed_count = models.IntegerField(default=0)

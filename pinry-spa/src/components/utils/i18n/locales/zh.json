@@ -129,5 +129,7 @@
   "errorTypeHttp4xx": "HTTP 4xx",
   "errorTypeHttp5xx": "HTTP 5xx",
   "errorTypeUnknown": "未知错误",
-  "errorTypeFilterLabel": "按错误类型筛选"
+  "errorTypeFilterLabel": "按错误类型筛选",
+  "linkCheckCancelTask": "停止巡检",
+  "linkCheckTaskCancelled": "已取消"
 }
