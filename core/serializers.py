@@ -286,8 +286,20 @@ class PinWithoutImageSerializer(serializers.Serializer):
     description = serializers.CharField()
 
 
+class MediaCheckReportQuerySerializer(serializers.Serializer):
+    max_depth = serializers.IntegerField(required=False, min_value=1, max_value=100)
+    exclude_dirs = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+    )
+    output = serializers.CharField(required=False)
+
+
 class MediaCheckSerializer(serializers.Serializer):
     media_root = serializers.CharField()
+    scan_time = serializers.CharField()
+    max_depth = serializers.IntegerField()
+    exclude_dirs = serializers.ListField(child=serializers.CharField())
     total_files = serializers.IntegerField()
     total_db_files = serializers.IntegerField()
     orphan_count = serializers.IntegerField()
@@ -295,10 +307,19 @@ class MediaCheckSerializer(serializers.Serializer):
     orphan_files = OrphanFileSerializer(many=True)
     missing_files = serializers.ListField(child=serializers.CharField())
     pins_without_image = PinWithoutImageSerializer(many=True)
+    delete_orphans_result = serializers.DictField(required=False)
+    fix_missing_result = serializers.DictField(required=False)
+    output_path = serializers.CharField(required=False)
 
 
 class MediaCheckFixSerializer(serializers.Serializer):
     action = serializers.ChoiceField(choices=['delete_orphans', 'fix_missing', 'all'])
+    max_depth = serializers.IntegerField(required=False, min_value=1, max_value=100)
+    exclude_dirs = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+    )
+    output = serializers.CharField(required=False)
 
 
 class DeleteOrphanResultSerializer(serializers.Serializer):

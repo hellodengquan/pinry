@@ -1,4 +1,5 @@
 import os
+import json
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
@@ -7,6 +8,9 @@ from core.utils import (
     run_media_check,
     delete_orphan_files,
     fix_missing_files,
+    save_report,
+    DEFAULT_MAX_DEPTH,
+    DEFAULT_EXCLUDE_DIRS,
 )
 
 
@@ -35,18 +39,41 @@ class Command(BaseCommand):
             default=False,
             help='静默模式，只输出汇总信息',
         )
+        parser.add_argument(
+            '--json',
+            action='store_true',
+            dest='json_output',
+            default=False,
+            help='以JSON格式输出结果（适合CI/CD流水线）',
+        )
+        parser.add_argument(
+            '--output',
+            type=str,
+            dest='output',
+            default=None,
+            help='将报告保存到指定文件路径（JSON格式）',
+        )
+        parser.add_argument(
+            '--max-depth',
+            type=int,
+            dest='max_depth',
+            default=DEFAULT_MAX_DEPTH,
+            help=f'目录扫描最大深度，默认: {DEFAULT_MAX_DEPTH}',
+        )
+        parser.add_argument(
+            '--exclude',
+            action='append',
+            dest='exclude_dirs',
+            default=None,
+            help=f'要排除的目录名，可多次指定，默认排除: {", ".join(sorted(DEFAULT_EXCLUDE_DIRS))}',
+        )
 
-    def handle(self, *args, **options):
-        delete_orphans = options['delete_orphans']
-        fix_missing = options['fix_missing']
-        quiet = options['quiet']
-
-        self.stdout.write(self.style.SUCCESS('开始媒体目录巡检...'))
-        self.stdout.write('=' * 60)
-
-        result = run_media_check()
+    def _print_text_report(self, result, quiet, delete_orphans, fix_missing):
         media_root = result['media_root']
         self.stdout.write(f'媒体根目录: {media_root}')
+        self.stdout.write(f'扫描时间: {result["scan_time"]}')
+        self.stdout.write(f'最大扫描深度: {result["max_depth"]}')
+        self.stdout.write(f'排除目录: {", ".join(result["exclude_dirs"])}')
         self.stdout.write('')
 
         self.stdout.write(self.style.SUCCESS('=== 巡检结果 ==='))
@@ -81,9 +108,15 @@ class Command(BaseCommand):
                     )
             self.stdout.write('')
 
+        orphan_result = None
+        missing_result = None
+
         if delete_orphans and result['orphan_count'] > 0:
             self.stdout.write(self.style.WARNING('正在删除孤儿文件...'))
-            orphan_result = delete_orphan_files()
+            orphan_result = delete_orphan_files(
+                max_depth=result['max_depth'],
+                exclude_dirs=set(result['exclude_dirs']),
+            )
             if not quiet:
                 for file in orphan_result['deleted_files']:
                     self.stdout.write(f'  已删除: {file}')
@@ -98,7 +131,10 @@ class Command(BaseCommand):
 
         if fix_missing and result['missing_count'] > 0:
             self.stdout.write(self.style.WARNING('正在修复缺失文件的数据库记录...'))
-            missing_result = fix_missing_files()
+            missing_result = fix_missing_files(
+                max_depth=result['max_depth'],
+                exclude_dirs=set(result['exclude_dirs']),
+            )
             if not quiet:
                 for error in missing_result['errors']:
                     self.stdout.write(
@@ -115,5 +151,57 @@ class Command(BaseCommand):
             )
 
         self.stdout.write(self.style.SUCCESS('巡检完成！'))
+        return orphan_result, missing_result
+
+    def handle(self, *args, **options):
+        delete_orphans = options['delete_orphans']
+        fix_missing = options['fix_missing']
+        quiet = options['quiet']
+        json_output = options['json_output']
+        output_path = options['output']
+        max_depth = options['max_depth']
+        exclude_dirs = options['exclude_dirs']
+
+        if exclude_dirs is not None:
+            exclude_dirs = set(exclude_dirs)
+
+        if not json_output:
+            self.stdout.write(self.style.SUCCESS('开始媒体目录巡检...'))
+            self.stdout.write('=' * 60)
+
+        result = run_media_check(max_depth=max_depth, exclude_dirs=exclude_dirs)
+
+        orphan_result = None
+        missing_result = None
+
+        if json_output:
+            if delete_orphans and result['orphan_count'] > 0:
+                orphan_result = delete_orphan_files(
+                    max_depth=max_depth,
+                    exclude_dirs=exclude_dirs,
+                )
+                result['delete_orphans_result'] = orphan_result
+
+            if fix_missing and result['missing_count'] > 0:
+                missing_result = fix_missing_files(
+                    max_depth=max_depth,
+                    exclude_dirs=exclude_dirs,
+                )
+                result['fix_missing_result'] = missing_result
+
+            output_data = result
+        else:
+            orphan_result, missing_result = self._print_text_report(
+                result, quiet, delete_orphans, fix_missing
+            )
+            output_data = result
+
+        if output_path:
+            saved_path = save_report(output_data, output_path)
+            if not json_output:
+                self.stdout.write(self.style.SUCCESS(f'报告已保存到: {saved_path}'))
+
+        if json_output:
+            self.stdout.write(json.dumps(output_data, ensure_ascii=False, indent=2))
 
         return result

@@ -12,7 +12,14 @@ from core import serializers as api
 from core.models import Image, Pin, Board
 from core.permissions import IsOwnerOrReadOnly, OwnerOnlyIfPrivate, SuperUserOnly
 from core.serializers import filter_private_pin, filter_private_board
-from core.utils import run_media_check, delete_orphan_files, fix_missing_files
+from core.utils import (
+    run_media_check,
+    delete_orphan_files,
+    fix_missing_files,
+    save_report,
+    DEFAULT_MAX_DEPTH,
+    DEFAULT_EXCLUDE_DIRS,
+)
 
 
 class ImageViewSet(mixins.CreateModelMixin, GenericViewSet):
@@ -84,9 +91,31 @@ class MediaCheckViewSet(viewsets.GenericViewSet):
     permission_classes = [SuperUserOnly]
     serializer_class = api.MediaCheckSerializer
 
+    def _get_scan_params(self, data):
+        max_depth = data.get('max_depth', DEFAULT_MAX_DEPTH)
+        exclude_dirs = data.get('exclude_dirs')
+        if exclude_dirs is not None:
+            exclude_dirs = set(exclude_dirs)
+        return max_depth, exclude_dirs
+
+    def _save_report_if_needed(self, result, output_path):
+        if output_path:
+            saved_path = save_report(result, output_path)
+            result['output_path'] = saved_path
+        return result
+
     @action(detail=False, methods=['get'])
     def report(self, request):
-        result = run_media_check()
+        query_serializer = api.MediaCheckReportQuerySerializer(data=request.query_params)
+        query_serializer.is_valid(raise_exception=True)
+        params = query_serializer.validated_data
+
+        max_depth, exclude_dirs = self._get_scan_params(params)
+        output_path = params.get('output')
+
+        result = run_media_check(max_depth=max_depth, exclude_dirs=exclude_dirs)
+        result = self._save_report_if_needed(result, output_path)
+
         serializer = api.MediaCheckSerializer(result)
         return Response(serializer.data)
 
@@ -94,20 +123,41 @@ class MediaCheckViewSet(viewsets.GenericViewSet):
     def fix(self, request):
         serializer = api.MediaCheckFixSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        action = serializer.validated_data['action']
+        data = serializer.validated_data
+
+        action = data['action']
+        max_depth, exclude_dirs = self._get_scan_params(data)
+        output_path = data.get('output')
 
         results = {}
 
         if action in ['delete_orphans', 'all']:
-            orphan_result = delete_orphan_files()
+            orphan_result = delete_orphan_files(
+                max_depth=max_depth,
+                exclude_dirs=exclude_dirs,
+            )
             results['delete_orphans'] = api.DeleteOrphanResultSerializer(orphan_result).data
 
         if action in ['fix_missing', 'all']:
-            missing_result = fix_missing_files()
+            missing_result = fix_missing_files(
+                max_depth=max_depth,
+                exclude_dirs=exclude_dirs,
+            )
             results['fix_missing'] = api.FixMissingResultSerializer(missing_result).data
 
         if action == 'all':
-            check_result = run_media_check()
+            check_result = run_media_check(
+                max_depth=max_depth,
+                exclude_dirs=exclude_dirs,
+            )
+            check_result = self._save_report_if_needed(check_result, output_path)
+            results['report'] = api.MediaCheckSerializer(check_result).data
+        elif output_path:
+            check_result = run_media_check(
+                max_depth=max_depth,
+                exclude_dirs=exclude_dirs,
+            )
+            check_result = self._save_report_if_needed(check_result, output_path)
             results['report'] = api.MediaCheckSerializer(check_result).data
 
         return Response(results, status=status.HTTP_200_OK)
