@@ -93,6 +93,11 @@ class Board(models.Model):
     name = models.CharField(max_length=128, blank=False, null=False)
     private = models.BooleanField(default=False, blank=False)
     pins = models.ManyToManyField("Pin", related_name="pins", blank=True)
+    _legacy_collaborators = models.TextField(
+        default='[]',
+        blank=True,
+        help_text="Legacy field for collaborator data backup during migration rollback."
+    )
 
     published = models.DateTimeField(auto_now_add=True)
 
@@ -107,11 +112,11 @@ class BoardCollaborator(models.Model):
 
     _PERMISSION_HIERARCHY = {
         PermissionLevel.VIEW: 10,
-        PermissionLevel.EDIT: 50,
-        PermissionLevel.MANAGE: 90,
+        PermissionLevel.EDIT: 20,
+        PermissionLevel.MANAGE: 30,
     }
 
-    _RESERVED_HIERARCHY_SLOTS = [20, 30, 40, 60, 70, 80]
+    _RESERVED_HIERARCHY_SLOTS = [12, 15, 18, 22, 25, 28]
 
     _METHOD_PERMISSION_MAP = {
         'GET': PermissionLevel.VIEW,
@@ -167,13 +172,19 @@ class BoardCollaborator(models.Model):
         board = collaborator_record.board
         if user == board.submitter:
             return True
+        if method == 'DELETE':
+            if collaborator_record.user == user:
+                return True
+            actor_perm = cls.get_permission_level(user, board)
+            target_perm = collaborator_record.permission
+            if actor_perm is None or target_perm is None:
+                return False
+            return cls._PERMISSION_HIERARCHY[actor_perm] > cls._PERMISSION_HIERARCHY[target_perm]
         required = cls._METHOD_PERMISSION_MAP.get(method, cls.PermissionLevel.MANAGE)
         if not cls.has_min_permission(user, board, required):
             return False
         if method in ('PATCH', 'PUT'):
             return collaborator_record.user == user
-        if method == 'DELETE':
-            return cls.has_min_permission(user, board, cls.PermissionLevel.MANAGE)
         return True
 
 
