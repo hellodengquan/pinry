@@ -1,5 +1,6 @@
 import os
 import json
+import sys
 
 from django.core.management.base import BaseCommand
 
@@ -7,9 +8,9 @@ from core.utils import (
     run_media_check,
     delete_orphan_files,
     fix_missing_files,
-    save_report,
     MediaCheckRenderer,
     get_audit_log_retention_days,
+    auto_cleanup_audit_logs_if_needed,
 )
 from core.models import MediaCheckAuditLog
 
@@ -51,7 +52,15 @@ class Command(BaseCommand):
             type=str,
             dest='output',
             default=None,
-            help='将报告保存到指定文件路径（JSON格式）',
+            help='将报告保存到指定文件路径（支持 .json 和 .txt）',
+        )
+        parser.add_argument(
+            '--output-format',
+            type=str,
+            dest='output_format',
+            choices=['json', 'text'],
+            default=None,
+            help='输出文件格式（默认根据文件后缀推断）',
         )
         parser.add_argument(
             '--max-depth',
@@ -65,7 +74,7 @@ class Command(BaseCommand):
             action='append',
             dest='exclude_dirs',
             default=None,
-            help='要排除的目录名，可多次指定',
+            help='要排除的目录名/glob 模式，可多次指定（例如 ".cache_*"）',
         )
         parser.add_argument(
             '--no-audit',
@@ -75,18 +84,32 @@ class Command(BaseCommand):
             help='不记录审计日志',
         )
         parser.add_argument(
+            '--no-auto-cleanup',
+            action='store_true',
+            dest='no_auto_cleanup',
+            default=False,
+            help='禁用自动清理过期审计日志',
+        )
+        parser.add_argument(
             '--cleanup-old',
             action='store_true',
             dest='cleanup_old',
             default=False,
-            help='清理过期的审计日志',
+            help='仅清理过期的审计日志然后退出',
         )
         parser.add_argument(
             '--retention-days',
             type=int,
             dest='retention_days',
             default=None,
-            help='审计日志保留天数（仅与 --cleanup-old 配合使用）',
+            help='审计日志保留天数',
+        )
+        parser.add_argument(
+            '--auto',
+            action='store_true',
+            dest='auto_mode',
+            default=False,
+            help='cron 友好模式：启用 --json --quiet --delete-orphans --fix-missing + 自动清理',
         )
 
     def _determine_action(self, delete_orphans, fix_missing):
@@ -98,15 +121,50 @@ class Command(BaseCommand):
             return MediaCheckAuditLog.ACTION_FIX_MISSING
         return MediaCheckAuditLog.ACTION_CHECK
 
+    def _detect_output_format(self, output_path, explicit_format):
+        if explicit_format:
+            return explicit_format
+        if output_path:
+            lower = output_path.lower()
+            if lower.endswith('.json'):
+                return 'json'
+            if lower.endswith('.txt') or lower.endswith('.log'):
+                return 'text'
+        return 'json'
+
+    def _write_console_text(self, renderer, quiet):
+        for line in renderer.iter_text(quiet=quiet):
+            if '孤儿文件' in line or '缺失文件' in line or '缺少图片的Pin' in line:
+                self.stdout.write(self.style.WARNING(line))
+            elif '已删除' in line or '删除Image' in line or '删除Thumbnail' in line or '删除Pin' in line:
+                self.stdout.write(self.style.SUCCESS(line))
+            elif '失败' in line or '✗' in line:
+                self.stdout.write(self.style.ERROR(line))
+            elif '=== 巡检结果 ===' in line or '巡检完成' in line:
+                self.stdout.write(self.style.SUCCESS(line))
+            else:
+                self.stdout.write(line)
+
     def handle(self, *args, **options):
+        auto_mode = options['auto_mode']
+
+        if auto_mode:
+            options['json_output'] = True
+            options['quiet'] = True
+            options['delete_orphans'] = True
+            options['fix_missing'] = True
+            options['no_auto_cleanup'] = False
+
         delete_orphans = options['delete_orphans']
         fix_missing = options['fix_missing']
         quiet = options['quiet']
         json_output = options['json_output']
         output_path = options['output']
+        output_format = self._detect_output_format(output_path, options['output_format'])
         max_depth = options['max_depth']
         exclude_dirs = options['exclude_dirs']
         no_audit = options['no_audit']
+        no_auto_cleanup = options['no_auto_cleanup']
         cleanup_old = options['cleanup_old']
         retention_days = options['retention_days']
 
@@ -122,9 +180,16 @@ class Command(BaseCommand):
                 self.stdout.write(json.dumps({'cleaned_count': cleaned}, ensure_ascii=False))
             return cleaned
 
-        if not json_output:
+        if not json_output and not quiet:
             self.stdout.write(self.style.SUCCESS('开始媒体目录巡检...'))
             self.stdout.write('=' * 60)
+
+        cleaned_count = 0
+        if not no_auto_cleanup:
+            try:
+                cleaned_count = auto_cleanup_audit_logs_if_needed(retention_days)
+            except Exception:
+                cleaned_count = 0
 
         result = run_media_check(max_depth=max_depth, exclude_dirs=exclude_dirs)
 
@@ -162,25 +227,18 @@ class Command(BaseCommand):
                 pass
 
         if output_path:
-            full_report = renderer.to_dict()
-            saved_path = save_report(full_report, output_path)
+            saved_path = renderer.write_to_file(output_path, format=output_format)
             if not json_output:
                 self.stdout.write(self.style.SUCCESS(f'报告已保存到: {saved_path}'))
 
+        if cleaned_count > 0 and not json_output and not quiet:
+            days = retention_days if retention_days else get_audit_log_retention_days()
+            self.stdout.write(self.style.SUCCESS(f'自动清理 {cleaned_count} 条过期审计日志（保留 {days} 天）'))
+
         if json_output:
-            self.stdout.write(renderer.to_json())
+            renderer.write_json_to(self.stdout)
+            self.stdout.write('\n')
         else:
-            text = renderer.to_text(quiet=quiet)
-            for line in text.split('\n'):
-                if '孤儿文件' in line or '缺失文件' in line or '缺少图片的Pin' in line:
-                    self.stdout.write(self.style.WARNING(line))
-                elif '已删除' in line or '删除Image' in line or '删除Thumbnail' in line or '删除Pin' in line:
-                    self.stdout.write(self.style.SUCCESS(line))
-                elif '失败' in line or '✗' in line:
-                    self.stdout.write(self.style.ERROR(line))
-                elif '=== 巡检结果 ===' in line or '巡检完成' in line:
-                    self.stdout.write(self.style.SUCCESS(line))
-                else:
-                    self.stdout.write(line)
+            self._write_console_text(renderer, quiet)
 
         return result
