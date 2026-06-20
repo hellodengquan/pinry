@@ -7,6 +7,7 @@ from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 from taggit.models import Tag
+import logging
 
 from core import serializers as api
 from core.models import Image, Pin, Board
@@ -17,6 +18,8 @@ from core.services import (
     PreviewContentType,
     get_preview_manager,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ImageViewSet(mixins.CreateModelMixin, GenericViewSet):
@@ -106,6 +109,116 @@ class PinViewSet(viewsets.ModelViewSet):
             "image_id": pin.image_id,
         })
         return Response(info, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'], url_path='export/json')
+    def export_json(self, request):
+        from django.http import JsonResponse
+        import json
+
+        queryset = self.filter_queryset(self.get_queryset())[:1000]
+        preview_manager = get_preview_manager()
+
+        items = []
+        for pin in queryset:
+            item = {
+                "id": pin.pk,
+                "url": pin.url,
+                "referer": pin.referer,
+                "description": pin.description,
+                "private": pin.private,
+                "published": pin.published.isoformat() if pin.published else None,
+                "image_id": pin.image_id,
+                "submitter": pin.submitter.username if pin.submitter else None,
+                "tags": [t.name for t in pin.tags.all()],
+            }
+            if pin.url:
+                try:
+                    cache_info = preview_manager.inspect(
+                        url=pin.url,
+                        referer=pin.referer,
+                        content_type_hint=PreviewContentType.IMAGE,
+                    )
+                    item["preview_cache_hit"] = cache_info.get("cache_hit", False)
+                    item["preview_service"] = cache_info.get("detected_service")
+                    cached = cache_info.get("cached_result") or {}
+                    item["preview_content_type"] = cached.get("content_type")
+                    item["preview_image_id"] = cached.get("image_id")
+                    meta = cached.get("metadata") or {}
+                    item["preview_width"] = meta.get("width")
+                    item["preview_height"] = meta.get("height")
+                    item["preview_title"] = meta.get("title")
+                    item["preview_mime_type"] = meta.get("mime_type")
+                except Exception:
+                    item["preview_error"] = "inspection_failed"
+            items.append(item)
+
+        response = JsonResponse(
+            items,
+            safe=False,
+            json_dumps_params={"indent": 2},
+        )
+        response["Content-Disposition"] = 'attachment; filename="pins_export.json"'
+        return response
+
+    @action(detail=False, methods=['get'], url_path='export/csv')
+    def export_csv(self, request):
+        from django.http import HttpResponse
+        import csv
+        import io
+
+        queryset = self.filter_queryset(self.get_queryset())[:1000]
+        preview_manager = get_preview_manager()
+
+        headers = [
+            "id", "url", "referer", "description", "private", "published",
+            "image_id", "submitter", "tags",
+            "preview_cache_hit", "preview_service", "preview_content_type",
+            "preview_image_id", "preview_width", "preview_height",
+            "preview_title", "preview_mime_type",
+        ]
+
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=headers)
+        writer.writeheader()
+
+        for pin in queryset:
+            row = {
+                "id": pin.pk,
+                "url": pin.url or "",
+                "referer": pin.referer or "",
+                "description": pin.description or "",
+                "private": "yes" if pin.private else "no",
+                "published": pin.published.isoformat() if pin.published else "",
+                "image_id": pin.image_id or "",
+                "submitter": pin.submitter.username if pin.submitter else "",
+                "tags": ",".join(t.name for t in pin.tags.all()),
+            }
+
+            if pin.url:
+                try:
+                    cache_info = preview_manager.inspect(
+                        url=pin.url,
+                        referer=pin.referer,
+                        content_type_hint=PreviewContentType.IMAGE,
+                    )
+                    row["preview_cache_hit"] = "yes" if cache_info.get("cache_hit") else "no"
+                    row["preview_service"] = cache_info.get("detected_service") or ""
+                    cached = cache_info.get("cached_result") or {}
+                    row["preview_content_type"] = cached.get("content_type") or ""
+                    row["preview_image_id"] = cached.get("image_id") or ""
+                    meta = cached.get("metadata") or {}
+                    row["preview_width"] = meta.get("width") or ""
+                    row["preview_height"] = meta.get("height") or ""
+                    row["preview_title"] = meta.get("title") or ""
+                    row["preview_mime_type"] = meta.get("mime_type") or ""
+                except Exception:
+                    row["preview_cache_hit"] = "error"
+
+            writer.writerow(row)
+
+        response = HttpResponse(output.getvalue(), content_type="text/csv; charset=utf-8")
+        response["Content-Disposition"] = 'attachment; filename="pins_export.csv"'
+        return response
 
 
 class BoardViewSet(viewsets.ModelViewSet):
@@ -303,6 +416,56 @@ class PreviewViewSet(viewsets.ViewSet):
         return Response({
             "count": len(plugins),
             "plugins": plugins,
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['post'], url_path='webhook')
+    def webhook(self, request):
+        from core.services.webhook_service import (
+            WebhookError,
+            is_webhook_enabled,
+            process_webhook,
+        )
+
+        if not is_webhook_enabled():
+            return Response(
+                {"error": "webhook is disabled", "code": "webhook_disabled"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        try:
+            result = process_webhook(request)
+            return Response(result, status=status.HTTP_200_OK)
+        except WebhookError as e:
+            return Response(
+                {"error": e.message, "code": e.code},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception as e:
+            logger.error("Unexpected webhook error: %s", e)
+            return Response(
+                {"error": "internal server error", "code": "internal_error"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    @action(detail=False, methods=['get'], url_path='webhook/info')
+    def webhook_info(self, request):
+        from core.services.webhook_service import (
+            WEBHOOK_ACTIONS,
+            WEBHOOK_SIGNATURE_HEADER,
+            is_webhook_enabled,
+        )
+        return Response({
+            "enabled": is_webhook_enabled(),
+            "signature_header": WEBHOOK_SIGNATURE_HEADER,
+            "supported_actions": list(WEBHOOK_ACTIONS.keys()),
+            "example_payload": {
+                "action": "refresh",
+                "url": "http://example.com/image.jpg",
+                "referer": "http://example.com/",
+                "content_type": "image",
+                "force": True,
+                "async": False,
+            },
         }, status=status.HTTP_200_OK)
 
 

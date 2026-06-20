@@ -1063,3 +1063,228 @@ class PluginCircuitBreakerTests(TestCase):
 
         plugins = get_plugins_by_capability("preview_pre_fetch")
         self.assertIsInstance(plugins, list)
+
+
+class PinExportTests(APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.user = create_user("export_test_user")
+        self.client.login(username=self.user.username, password='password')
+
+    @mock.patch('requests.get', mock_requests_get_image)
+    def test_export_json_endpoint(self):
+        from django.core.cache import cache
+        cache.clear()
+
+        pin_url = reverse("pin-list")
+        for i in range(3):
+            self.client.post(pin_url, data={
+                "url": f"http://example.com/export-{i}.jpg",
+                "description": f"test pin {i}",
+                "tags": [f"tag{i}"],
+            }, format="json")
+
+        export_url = reverse("pin-export-json")
+        response = self.client.get(export_url, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response["Content-Type"], "application/json"
+        )
+        self.assertIn("attachment", response.get("Content-Disposition", ""))
+        self.assertIn("pins_export.json", response.get("Content-Disposition", ""))
+
+    @mock.patch('requests.get', mock_requests_get_image)
+    def test_export_csv_endpoint(self):
+        from django.core.cache import cache
+        cache.clear()
+
+        pin_url = reverse("pin-list")
+        for i in range(3):
+            self.client.post(pin_url, data={
+                "url": f"http://example.com/csv-{i}.jpg",
+                "description": f"test pin {i}",
+            }, format="json")
+
+        export_url = reverse("pin-export-csv")
+        response = self.client.get(export_url, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("text/csv", response["Content-Type"])
+        self.assertIn("attachment", response.get("Content-Disposition", ""))
+        self.assertIn("pins_export.csv", response.get("Content-Disposition", ""))
+
+        content = response.content.decode("utf-8")
+        self.assertIn("id,url,referer", content)
+        self.assertIn("preview_cache_hit", content)
+
+
+class PreviewWebhookTests(APITestCase):
+    TEST_SECRET = "test-webhook-secret-123"
+
+    def setUp(self):
+        super().setUp()
+        self.user = create_user("webhook_test_user")
+        self.client.login(username=self.user.username, password='password')
+
+    def _sign_payload(self, payload: dict, secret: str) -> str:
+        from core.services.webhook_service import compute_signature
+        import json
+        body = json.dumps(payload).encode("utf-8")
+        return compute_signature(body, secret)
+
+    def test_webhook_info_endpoint_disabled(self):
+        url = reverse("preview-webhook-info")
+        response = self.client.get(url, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertFalse(data["enabled"])
+        self.assertIn("supported_actions", data)
+        self.assertIn("refresh", data["supported_actions"])
+
+    def test_webhook_endpoint_disabled_returns_404(self):
+        url = reverse("preview-webhook")
+        response = self.client.post(url, data={"action": "refresh"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_compute_signature_deterministic(self):
+        from core.services.webhook_service import compute_signature
+
+        sig1 = compute_signature(b"hello world", self.TEST_SECRET)
+        sig2 = compute_signature(b"hello world", self.TEST_SECRET)
+        self.assertEqual(sig1, sig2)
+        self.assertTrue(sig1.startswith("sha256="))
+
+    def test_verify_signature_valid(self):
+        from core.services.webhook_service import (
+            compute_signature,
+            verify_signature,
+        )
+
+        body = b'{"url":"http://example.com/test.jpg"}'
+        sig = compute_signature(body, self.TEST_SECRET)
+        self.assertTrue(verify_signature(body, sig, self.TEST_SECRET))
+
+    def test_verify_signature_invalid(self):
+        from core.services.webhook_service import verify_signature
+
+        body = b'{"url":"http://example.com/test.jpg"}'
+        self.assertFalse(verify_signature(body, "sha256=badbadbad", self.TEST_SECRET))
+
+    def test_webhook_enabled_with_secret_refresh(self):
+        from django.conf import settings
+        from unittest import mock
+        from django.core.cache import cache
+        import json
+
+        cache.clear()
+
+        with mock.patch("core.services.webhook_service.WEBHOOK_ENABLED", True):
+            with mock.patch("core.services.webhook_service.WEBHOOK_SECRET", self.TEST_SECRET):
+                with mock.patch("requests.get", mock_requests_get_image):
+                    url = reverse("preview-webhook")
+                    payload = {
+                        "action": "refresh",
+                        "url": "http://example.com/webhook-test.jpg",
+                        "content_type": "image",
+                    }
+                    body = json.dumps(payload).encode("utf-8")
+                    from core.services.webhook_service import compute_signature
+                    sig = compute_signature(body, self.TEST_SECRET)
+
+                    response = self.client.post(
+                        url,
+                        data=body,
+                        content_type="application/json",
+                        HTTP_X_PINRY_SIGNATURE=sig,
+                    )
+                    self.assertEqual(response.status_code, status.HTTP_200_OK)
+                    data = response.json()
+                    self.assertEqual(data["status"], "success")
+                    self.assertIn("image_id", data)
+
+    def test_webhook_invalid_signature_rejected(self):
+        from unittest import mock
+
+        with mock.patch("core.services.webhook_service.WEBHOOK_ENABLED", True):
+            with mock.patch("core.services.webhook_service.WEBHOOK_SECRET", self.TEST_SECRET):
+                url = reverse("preview-webhook")
+                payload = {"action": "refresh", "url": "http://example.com/x.jpg"}
+                response = self.client.post(
+                    url,
+                    data=payload,
+                    format="json",
+                    HTTP_X_PINRY_SIGNATURE="sha256=bad",
+                )
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertEqual(response.json()["code"], "invalid_signature")
+
+    def test_webhook_invalidate_all(self):
+        from unittest import mock
+        from django.core.cache import cache
+        import json
+
+        cache.clear()
+
+        with mock.patch("core.services.webhook_service.WEBHOOK_ENABLED", True):
+            with mock.patch("core.services.webhook_service.WEBHOOK_SECRET", self.TEST_SECRET):
+                url = reverse("preview-webhook")
+                payload = {"action": "invalidate", "all": True}
+                body = json.dumps(payload).encode("utf-8")
+                from core.services.webhook_service import compute_signature
+                sig = compute_signature(body, self.TEST_SECRET)
+
+                response = self.client.post(
+                    url,
+                    data=body,
+                    content_type="application/json",
+                    HTTP_X_PINRY_SIGNATURE=sig,
+                )
+                self.assertEqual(response.status_code, status.HTTP_200_OK)
+                data = response.json()
+                self.assertTrue(data["invalidated_all"])
+                self.assertIn("version_bumped", data)
+
+    def test_webhook_unknown_action_error(self):
+        from unittest import mock
+        import json
+
+        with mock.patch("core.services.webhook_service.WEBHOOK_ENABLED", True):
+            with mock.patch("core.services.webhook_service.WEBHOOK_SECRET", self.TEST_SECRET):
+                url = reverse("preview-webhook")
+                payload = {"action": "nonexistent_action", "url": "http://x.com/y.jpg"}
+                body = json.dumps(payload).encode("utf-8")
+                from core.services.webhook_service import compute_signature
+                sig = compute_signature(body, self.TEST_SECRET)
+
+                response = self.client.post(
+                    url,
+                    data=body,
+                    content_type="application/json",
+                    HTTP_X_PINRY_SIGNATURE=sig,
+                )
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertEqual(response.json()["code"], "unknown_action")
+
+    def test_is_webhook_enabled_false_by_default(self):
+        from core.services.webhook_service import is_webhook_enabled
+        self.assertFalse(is_webhook_enabled())
+
+    def test_webhook_missing_url_in_refresh(self):
+        from unittest import mock
+        import json
+
+        with mock.patch("core.services.webhook_service.WEBHOOK_ENABLED", True):
+            with mock.patch("core.services.webhook_service.WEBHOOK_SECRET", self.TEST_SECRET):
+                url = reverse("preview-webhook")
+                payload = {"action": "refresh"}
+                body = json.dumps(payload).encode("utf-8")
+                from core.services.webhook_service import compute_signature
+                sig = compute_signature(body, self.TEST_SECRET)
+
+                response = self.client.post(
+                    url,
+                    data=body,
+                    content_type="application/json",
+                    HTTP_X_PINRY_SIGNATURE=sig,
+                )
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertEqual(response.json()["code"], "missing_url")
