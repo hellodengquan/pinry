@@ -422,6 +422,33 @@ class PreviewAPITests(APITestCase):
         data = response.json()
         self.assertFalse(data["from_cache"])
 
+    def test_cache_version_endpoint(self):
+        url = reverse("preview-cache-version")
+        response = self.client.get(url, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertIn("version", data)
+        self.assertIsInstance(data["version"], int)
+
+    def test_invalidate_cache_all_endpoint(self):
+        url = reverse("preview-invalidate-cache")
+        response = self.client.post(
+            url, data={"all": True}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertTrue(data.get("invalidated_all"))
+        self.assertIn("version_bumped", data)
+
+    def test_plugins_status_endpoint(self):
+        url = reverse("preview-plugins-status")
+        response = self.client.get(url, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertIn("count", data)
+        self.assertIn("plugins", data)
+        self.assertIsInstance(data["plugins"], list)
+
 
 class LegacyErrorMessageCompatibilityTests(TestCase):
     LEGACY_MESSAGE_MAP = {
@@ -678,3 +705,361 @@ class PinLifecyclePreviewIntegrationTests(APITestCase):
         response = self.client.post(refetch_url, format="json")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("error", response.json())
+
+
+class PreviewAsyncTasksTests(TestCase):
+    def test_has_celery_returns_boolean(self):
+        from core.tasks import has_celery
+        result = has_celery()
+        self.assertIsInstance(result, bool)
+
+    @mock.patch('requests.get', mock_requests_get_image)
+    def test_refresh_preview_task_sync_mode(self):
+        from django.core.cache import cache
+        from core.tasks import refresh_preview_task
+
+        cache.clear()
+        result = refresh_preview_task(
+            url="http://example.com/async-test.jpg",
+            referer="http://example.com/",
+            content_type="image",
+            force=True,
+        )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["url"], "http://example.com/async-test.jpg")
+        self.assertIsNotNone(result["image_id"])
+        self.assertEqual(result["content_type"], "image")
+
+    @mock.patch('requests.get', mock_requests_get_invalid)
+    def test_refresh_preview_task_invalid_content(self):
+        from django.core.cache import cache
+        from core.tasks import refresh_preview_task
+
+        cache.clear()
+        result = refresh_preview_task(
+            url="http://example.com/bad.jpg",
+            content_type="image",
+        )
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["error_code"], "invalid_content")
+
+    @mock.patch('requests.get', mock_requests_get_image)
+    def test_batch_refresh_preview_task(self):
+        from django.core.cache import cache
+        from core.tasks import batch_refresh_preview_task
+
+        cache.clear()
+        items = [
+            {"url": "http://example.com/batch-1.jpg", "content_type": "image"},
+            {"url": "http://example.com/batch-2.jpg", "content_type": "image"},
+        ]
+        result = batch_refresh_preview_task(items=items)
+        self.assertEqual(result["total"], 2)
+        self.assertEqual(len(result["success"]), 2)
+
+    def test_invalidate_preview_cache_task(self):
+        from core.tasks import invalidate_preview_cache_task
+
+        result = invalidate_preview_cache_task(
+            url="http://example.com/cache-test.jpg",
+            referer="http://example.com/",
+        )
+        self.assertEqual(result["status"], "success")
+        self.assertIn("invalidated", result)
+        self.assertIsInstance(result["invalidated"], int)
+
+    def test_inspect_preview_task(self):
+        from core.tasks import inspect_preview_task
+
+        result = inspect_preview_task(
+            url="http://example.com/inspect-task.jpg",
+            content_type="image",
+        )
+        self.assertIn("url", result)
+        self.assertIn("cache_key", result)
+        self.assertIn("cache_hit", result)
+
+    @mock.patch('requests.get', mock_requests_get_image)
+    def test_pin_refresh_task(self):
+        from django.core.cache import cache
+        from core.models import Pin, Image
+        from core.tasks import pin_refresh_task
+
+        cache.clear()
+        image = Image.objects.create()
+        pin = Pin.objects.create(
+            submitter=create_user("task_test_user"),
+            image=image,
+            url="http://example.com/pin-task.jpg",
+            description="test",
+        )
+
+        result = pin_refresh_task(pin_id=pin.pk)
+        self.assertIn("pin_id", result)
+        self.assertEqual(result["pin_id"], pin.pk)
+
+    def test_pin_refresh_task_not_found(self):
+        from core.tasks import pin_refresh_task
+
+        result = pin_refresh_task(pin_id=99999)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("pin not found", result["error"])
+
+    @mock.patch('requests.get', mock_requests_get_image)
+    def test_dispatch_refresh_sync(self):
+        from django.core.cache import cache
+        from core.tasks import dispatch_refresh
+
+        cache.clear()
+        result = dispatch_refresh(
+            url="http://example.com/dispatch.jpg",
+            content_type="image",
+            async_mode=False,
+        )
+        self.assertEqual(result["status"], "success")
+
+
+class CacheNamespaceTests(TestCase):
+    def test_cache_namespace_manager_initial_version(self):
+        from django.core.cache import cache
+        from core.services.preview_service import CacheNamespaceManager
+
+        cache.clear()
+        CacheNamespaceManager.reset_local_cache()
+
+        version = CacheNamespaceManager.get_version()
+        self.assertIsInstance(version, int)
+        self.assertGreaterEqual(version, 1)
+
+    def test_cache_namespace_bump_version(self):
+        from django.core.cache import cache
+        from core.services.preview_service import CacheNamespaceManager
+
+        cache.clear()
+        CacheNamespaceManager.reset_local_cache()
+
+        old_version = CacheNamespaceManager.get_version()
+        new_version = CacheNamespaceManager.bump_version()
+
+        self.assertGreater(new_version, old_version)
+
+    def test_cache_namespace_local_caching(self):
+        from django.core.cache import cache
+        from core.services.preview_service import CacheNamespaceManager
+
+        cache.clear()
+        CacheNamespaceManager.reset_local_cache()
+
+        v1 = CacheNamespaceManager.get_version()
+        v2 = CacheNamespaceManager.get_version()
+        self.assertEqual(v1, v2)
+
+    def test_cache_key_uses_namespace_version(self):
+        from core.services import PreviewRequest, PreviewContentType
+        from core.services.preview_service import CacheNamespaceManager
+
+        CacheNamespaceManager.reset_local_cache()
+        version_before = CacheNamespaceManager.get_version()
+
+        req = PreviewRequest(
+            url="http://example.com/ns-test.jpg",
+            content_type_hint=PreviewContentType.IMAGE,
+        )
+        key_before = req.cache_key()
+        self.assertIn(f"v{version_before}:", key_before)
+
+        CacheNamespaceManager.bump_version()
+        version_after = CacheNamespaceManager.get_version()
+        self.assertGreater(version_after, version_before)
+
+        key_after = req.cache_key()
+        self.assertIn(f"v{version_after}:", key_after)
+        self.assertNotEqual(key_before, key_after)
+
+    def test_preview_manager_invalidate_all(self):
+        from django.core.cache import cache
+        from core.services.preview_service import CacheNamespaceManager, get_preview_manager
+
+        cache.clear()
+        CacheNamespaceManager.reset_local_cache()
+
+        manager = get_preview_manager()
+        old_version = manager.get_cache_version()
+        result = manager.invalidate_all()
+
+        self.assertIsInstance(result, int)
+        self.assertGreaterEqual(result, 1)
+        self.assertGreater(manager.get_cache_version(), old_version)
+
+    def test_get_cache_namespace_version_exported(self):
+        from core.services import get_cache_namespace_version
+        version = get_cache_namespace_version()
+        self.assertIsInstance(version, int)
+
+    def test_bump_cache_namespace_exported(self):
+        from django.core.cache import cache
+        from core.services import (
+            bump_cache_namespace,
+            get_cache_namespace_version,
+        )
+        from core.services.preview_service import CacheNamespaceManager
+
+        cache.clear()
+        CacheNamespaceManager.reset_local_cache()
+
+        old = get_cache_namespace_version()
+        new = bump_cache_namespace()
+        self.assertGreater(new, old)
+
+
+class PluginCircuitBreakerTests(TestCase):
+    def test_circuit_breaker_initial_state_closed(self):
+        from pinry_plugins.builder._loader import (
+            PluginCircuitBreaker,
+            CircuitState,
+        )
+
+        cb = PluginCircuitBreaker(plugin_key="test.plugin")
+        self.assertEqual(cb.state, CircuitState.CLOSED)
+        self.assertTrue(cb.allow_request())
+
+    def test_circuit_breaker_trips_after_threshold(self):
+        from pinry_plugins.builder._loader import (
+            PluginCircuitBreaker,
+            CircuitState,
+        )
+
+        cb = PluginCircuitBreaker(
+            plugin_key="test.plugin",
+            error_threshold=3,
+            error_window=60,
+        )
+
+        self.assertTrue(cb.allow_request())
+        cb.record_failure()
+        cb.record_failure()
+        self.assertEqual(cb.state, CircuitState.CLOSED)
+        self.assertTrue(cb.allow_request())
+
+        cb.record_failure()
+        self.assertEqual(cb.state, CircuitState.OPEN)
+        self.assertFalse(cb.allow_request())
+
+    def test_circuit_breaker_half_open_after_recovery(self):
+        from pinry_plugins.builder._loader import (
+            PluginCircuitBreaker,
+            CircuitState,
+        )
+        import time
+
+        cb = PluginCircuitBreaker(
+            plugin_key="test.plugin",
+            error_threshold=2,
+            error_window=60,
+            recovery_timeout=0,
+        )
+
+        cb.record_failure()
+        cb.record_failure()
+        self.assertEqual(cb.state, CircuitState.OPEN)
+
+        time.sleep(0.01)
+        self.assertTrue(cb.allow_request())
+        self.assertEqual(cb.state, CircuitState.HALF_OPEN)
+
+    def test_circuit_breaker_recovery_on_success(self):
+        from pinry_plugins.builder._loader import (
+            PluginCircuitBreaker,
+            CircuitState,
+        )
+        import time
+
+        cb = PluginCircuitBreaker(
+            plugin_key="test.plugin",
+            error_threshold=2,
+            error_window=60,
+            recovery_timeout=0,
+        )
+
+        cb.record_failure()
+        cb.record_failure()
+        self.assertEqual(cb.state, CircuitState.OPEN)
+
+        time.sleep(0.01)
+        cb.allow_request()
+        cb.record_success()
+        self.assertEqual(cb.state, CircuitState.CLOSED)
+
+    def test_circuit_breaker_get_status(self):
+        from pinry_plugins.builder._loader import PluginCircuitBreaker
+
+        cb = PluginCircuitBreaker(
+            plugin_key="test.plugin",
+            error_threshold=3,
+            error_window=60,
+        )
+
+        status = cb.get_status()
+        self.assertEqual(status["plugin"], "test.plugin")
+        self.assertEqual(status["state"], "closed")
+        self.assertEqual(status["error_threshold"], 3)
+        self.assertEqual(status["current_error_count"], 0)
+        self.assertEqual(status["total_errors"], 0)
+        self.assertIn("trip_count", status)
+
+    def test_circuit_breaker_disabled_always_allows(self):
+        from pinry_plugins.builder._loader import (
+            PluginCircuitBreaker,
+            CircuitState,
+        )
+
+        cb = PluginCircuitBreaker(
+            plugin_key="test.plugin",
+            error_threshold=1,
+            error_window=60,
+            enabled=False,
+        )
+
+        cb.record_failure()
+        self.assertEqual(cb.state, CircuitState.CLOSED)
+        self.assertTrue(cb.allow_request())
+
+    def test_error_window_prunes_old_errors(self):
+        from pinry_plugins.builder._loader import PluginCircuitBreaker
+        import time
+
+        cb = PluginCircuitBreaker(
+            plugin_key="test.plugin",
+            error_threshold=3,
+            error_window=0,
+        )
+
+        cb.record_failure()
+        cb.record_failure()
+        time.sleep(0.01)
+        status = cb.get_status()
+        self.assertEqual(status["current_error_count"], 0)
+
+    def test_get_circuit_breaker_status_exported(self):
+        from pinry_plugins.builder import get_circuit_breaker_status
+
+        statuses = get_circuit_breaker_status()
+        self.assertIsInstance(statuses, dict)
+
+    def test_reset_circuit_breakers_exported(self):
+        from pinry_plugins.builder import (
+            reset_circuit_breakers,
+            get_circuit_breaker_status,
+        )
+
+        reset_circuit_breakers()
+        statuses = get_circuit_breaker_status()
+        for key, status in statuses.items():
+            self.assertEqual(status["state"], "closed")
+            self.assertEqual(status["trip_count"], 0)
+
+    def test_get_plugins_by_capability(self):
+        from pinry_plugins.builder import get_plugins_by_capability
+
+        plugins = get_plugins_by_capability("preview_pre_fetch")
+        self.assertIsInstance(plugins, list)

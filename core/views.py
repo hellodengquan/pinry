@@ -223,13 +223,22 @@ class PreviewViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['post'], url_path='invalidate-cache')
     def invalidate_cache(self, request):
         url = request.data.get('url')
+        invalidate_all = bool(request.data.get('all', False))
+        preview_manager = get_preview_manager()
+
+        if invalidate_all:
+            bumped = preview_manager.invalidate_all()
+            return Response(
+                {"invalidated_all": True, "version_bumped": bumped},
+                status=status.HTTP_200_OK,
+            )
+
         if not url:
             return Response(
                 {"url": "This field is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         referer = request.data.get('referer')
-        preview_manager = get_preview_manager()
         count = preview_manager.invalidate_cache_for_url(url, referer)
         return Response(
             {"invalidated": count},
@@ -263,6 +272,38 @@ class PreviewViewSet(viewsets.ViewSet):
             for t in PreviewContentType
         ]
         return Response({"supported": supported}, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'], url_path='cache-version')
+    def cache_version(self, request):
+        preview_manager = get_preview_manager()
+        version = preview_manager.get_cache_version()
+        return Response({
+            "version": version,
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'], url_path='plugins/status')
+    def plugins_status(self, request):
+        from pinry_plugins.builder import (
+            get_circuit_breaker_status,
+            get_plugin_registry,
+        )
+        registry = get_plugin_registry()
+        circuit_breakers = get_circuit_breaker_status()
+        plugins = []
+        for path, info in registry.items():
+            plugin_key = f"{info.get('module')}.{info.get('class')}"
+            cb_status = circuit_breakers.get(plugin_key, {})
+            plugins.append({
+                "path": path,
+                "class_name": info.get("class"),
+                "module": info.get("module"),
+                "capabilities": info.get("capabilities", {}),
+                "circuit_breaker": cb_status,
+            })
+        return Response({
+            "count": len(plugins),
+            "plugins": plugins,
+        }, status=status.HTTP_200_OK)
 
 
 drf_router = routers.DefaultRouter()

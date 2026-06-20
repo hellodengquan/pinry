@@ -1,14 +1,81 @@
 import hashlib
 import logging
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
+from threading import Lock
 from typing import Any, Callable, Dict, List, Optional, Type, Union
 
 from django.conf import settings
 from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
+
+
+class CacheNamespaceManager:
+    _global_version_key = "preview:cache_version"
+    _local_version: Optional[int] = None
+    _local_version_ts: float = 0
+    _version_ttl = 60
+    _lock = Lock()
+
+    @classmethod
+    def get_version(cls) -> int:
+        now = time.time()
+        if cls._local_version is not None and (now - cls._local_version_ts) < cls._version_ttl:
+            return cls._local_version
+
+        with cls._lock:
+            if cls._local_version is not None and (now - cls._local_version_ts) < cls._version_ttl:
+                return cls._local_version
+
+            try:
+                version = cache.get(cls._global_version_key)
+                if version is None:
+                    version = 1
+                    cache.set(cls._global_version_key, version, timeout=None)
+                cls._local_version = int(version)
+                cls._local_version_ts = now
+            except Exception:
+                logger.exception("Failed to get cache namespace version")
+                cls._local_version = cls._local_version or 1
+                cls._local_version_ts = now
+
+            return cls._local_version
+
+    @classmethod
+    def bump_version(cls) -> int:
+        try:
+            try:
+                new_version = cache.incr(cls._global_version_key)
+            except ValueError:
+                cache.add(cls._global_version_key, 1, timeout=None)
+                new_version = 1
+        except Exception:
+            logger.exception("Failed to bump cache namespace version")
+            new_version = int(time.time())
+
+        with cls._lock:
+            cls._local_version = new_version
+            cls._local_version_ts = time.time()
+
+        logger.info("Preview cache namespace bumped to version %d", new_version)
+        return new_version
+
+    @classmethod
+    def reset_local_cache(cls) -> None:
+        with cls._lock:
+            cls._local_version = None
+            cls._local_version_ts = 0
+
+
+def get_cache_namespace_version() -> int:
+    return CacheNamespaceManager.get_version()
+
+
+def bump_cache_namespace() -> int:
+    return CacheNamespaceManager.bump_version()
 
 
 class PreviewErrorCode(str, Enum):
@@ -95,7 +162,8 @@ class PreviewRequest:
         ]
         raw_key = "|".join(key_parts)
         hash_digest = hashlib.md5(raw_key.encode("utf-8")).hexdigest()
-        return f"preview:v1:{hash_digest}"
+        version = CacheNamespaceManager.get_version()
+        return f"preview:v{version}:{hash_digest}"
 
 
 @dataclass
@@ -467,6 +535,14 @@ class PreviewServiceManager:
             if self.invalidate_cache(request):
                 count += 1
         return count
+
+    def invalidate_all(self) -> int:
+        old_version = CacheNamespaceManager.get_version()
+        new_version = CacheNamespaceManager.bump_version()
+        return new_version - old_version if new_version > old_version else 1
+
+    def get_cache_version(self) -> int:
+        return CacheNamespaceManager.get_version()
 
     def preview(
         self,

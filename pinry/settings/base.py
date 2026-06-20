@@ -179,3 +179,12 @@ except ImportError:
         REST_FRAMEWORK['DEFAULT_SCHEMA_CLASS'] = 'rest_framework.schemas.coreapi.AutoSchema'
     except ImportError:
         pass
+
+PREVIEW_CACHE_TIMEOUT = 60 * 60 * 24
+PREVIEW_CACHE_KEY_PREFIX = "preview:v1"
+PREVIEW_CACHE_VERSION_KEY = "preview:cache_version"
+PREVIEW_ASYNC_TASKS = False
+PLUGIN_STRICT_CONTRACT = False
+PLUGIN_ERROR_THRESHOLD = 5
+PLUGIN_ERROR_WINDOW = 60
+PLUGIN_CIRCUIT_BREAKER_ENABLED = True

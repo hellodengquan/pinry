@@ -10,8 +10,11 @@ from .preview_service import (
     VideoPreviewService,
     PreviewRequest,
     PreviewMetadata,
+    CacheNamespaceManager,
     get_preview_manager,
     preview_error_to_legacy_message,
+    bump_cache_namespace,
+    get_cache_namespace_version,
 )
 
 __all__ = [
@@ -26,6 +29,9 @@ __all__ = [
     "VideoPreviewService",
     "PreviewRequest",
     "PreviewMetadata",
+    "CacheNamespaceManager",
     "get_preview_manager",
     "preview_error_to_legacy_message",
+    "bump_cache_namespace",
+    "get_cache_namespace_version",
 ]
