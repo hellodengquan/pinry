@@ -1,5 +1,9 @@
 from django.db import migrations, models
 import django.db.models.deletion
+import json
+
+
+BACKUP_TABLE_NAME = 'core_boardcollaborator_backup_0011'
 
 
 def get_permission_choices():
@@ -10,12 +14,62 @@ def get_permission_choices():
     ]
 
 
-def _noop_forward(apps, schema_editor):
-    pass
+def _ensure_backup_table(schema_editor):
+    backup_fields = [
+        ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False)),
+        ('board_id', models.IntegerField()),
+        ('user_id', models.IntegerField()),
+        ('permission', models.CharField(max_length=10, choices=get_permission_choices(), default='view')),
+        ('payload', models.TextField(default='{}')),
+    ]
+    backup_model = type(
+        'BoardCollaboratorBackup0011',
+        (models.Model,),
+        {
+            '__module__': 'core.migrations',
+            'Meta': type('Meta', (), {'app_label': 'core', 'db_table': BACKUP_TABLE_NAME}),
+        },
+    )
+    if not schema_editor.connection.introspection.table_name_converter(BACKUP_TABLE_NAME) in \
+            schema_editor.connection.introspection.table_names():
+        schema_editor.create_model(backup_model)
+    return backup_model
 
 
-def _noop_backward(apps, schema_editor):
-    pass
+def _forward_migrate(apps, schema_editor):
+    backup_model = _ensure_backup_table(schema_editor)
+    backup_exists = schema_editor.connection.introspection.table_name_converter(BACKUP_TABLE_NAME) in \
+        schema_editor.connection.introspection.table_names()
+
+    if backup_exists and backup_model.objects.exists():
+        BoardCollaborator = apps.get_model('core', 'BoardCollaborator')
+        for record in backup_model.objects.all():
+            BoardCollaborator.objects.get_or_create(
+                board_id=record.board_id,
+                user_id=record.user_id,
+                defaults={
+                    'permission': record.permission,
+                },
+            )
+        backup_model.objects.all().delete()
+
+
+def _backward_migrate(apps, schema_editor):
+    BoardCollaborator = apps.get_model('core', 'BoardCollaborator')
+    backup_model = _ensure_backup_table(schema_editor)
+
+    for collab in BoardCollaborator.objects.all():
+        backup_model.objects.create(
+            board_id=collab.board_id,
+            user_id=collab.user_id,
+            permission=collab.permission,
+            payload=json.dumps({
+                'id': collab.id,
+                'board_id': collab.board_id,
+                'user_id': collab.user_id,
+                'permission': collab.permission,
+            }),
+        )
 
 
 class Migration(migrations.Migration):
@@ -43,7 +97,7 @@ class Migration(migrations.Migration):
             },
         ),
         migrations.RunPython(
-            code=_noop_forward,
-            reverse_code=_noop_backward,
+            code=_forward_migrate,
+            reverse_code=_backward_migrate,
         ),
     ]

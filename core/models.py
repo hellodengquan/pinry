@@ -106,16 +106,18 @@ class BoardCollaborator(models.Model):
     PERMISSION_LEVELS = PermissionLevel  # alias for backwards compatibility
 
     _PERMISSION_HIERARCHY = {
-        PermissionLevel.VIEW: 1,
-        PermissionLevel.EDIT: 2,
-        PermissionLevel.MANAGE: 3,
+        PermissionLevel.VIEW: 10,
+        PermissionLevel.EDIT: 50,
+        PermissionLevel.MANAGE: 90,
     }
+
+    _RESERVED_HIERARCHY_SLOTS = [20, 30, 40, 60, 70, 80]
 
     _METHOD_PERMISSION_MAP = {
         'GET': PermissionLevel.VIEW,
         'HEAD': PermissionLevel.VIEW,
         'OPTIONS': PermissionLevel.VIEW,
-        'POST': PermissionLevel.EDIT,
+        'POST': PermissionLevel.MANAGE,
         'PATCH': PermissionLevel.EDIT,
         'PUT': PermissionLevel.EDIT,
         'DELETE': PermissionLevel.MANAGE,
@@ -155,6 +157,24 @@ class BoardCollaborator(models.Model):
         if perm is None:
             return False
         return cls._PERMISSION_HIERARCHY[perm] >= cls._PERMISSION_HIERARCHY[required_perm]
+
+    @classmethod
+    def can_manage_collaborator(cls, user, board):
+        return cls.has_min_permission(user, board, cls.PermissionLevel.MANAGE)
+
+    @classmethod
+    def can_modify_collaborator_record(cls, user, collaborator_record, method):
+        board = collaborator_record.board
+        if user == board.submitter:
+            return True
+        required = cls._METHOD_PERMISSION_MAP.get(method, cls.PermissionLevel.MANAGE)
+        if not cls.has_min_permission(user, board, required):
+            return False
+        if method in ('PATCH', 'PUT'):
+            return collaborator_record.user == user
+        if method == 'DELETE':
+            return cls.has_min_permission(user, board, cls.PermissionLevel.MANAGE)
+        return True
 
 
 class Pin(models.Model):

@@ -1,9 +1,10 @@
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_page
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework import viewsets, mixins, routers, permissions
+from rest_framework import viewsets, mixins, routers, permissions, status
 from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.permissions import BasePermission
+from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 from taggit.models import Tag
 
@@ -93,33 +94,19 @@ class BoardCollaboratorPermission(BasePermission):
             board = Board.objects.get(id=board_id)
         except Board.DoesNotExist:
             return False
-        if request.method in ('POST',):
-            return request.user == board.submitter
-        if request.method == 'DELETE':
-            return BoardCollaborator.has_min_permission(
-                request.user, board, BoardCollaborator.PermissionLevel.MANAGE
-            )
-        if request.method in permissions.SAFE_METHODS:
-            return BoardCollaborator.has_min_permission(
-                request.user, board, BoardCollaborator.PermissionLevel.VIEW
-            )
-        return True
+
+        if request.method == 'POST':
+            return BoardCollaborator.can_manage_collaborator(request.user, board)
+
+        required = BoardCollaborator._METHOD_PERMISSION_MAP.get(
+            request.method, BoardCollaborator.PermissionLevel.MANAGE
+        )
+        return BoardCollaborator.has_min_permission(request.user, board, required)
 
     def has_object_permission(self, request, view, obj):
-        board = obj.board
-        if request.user == board.submitter:
-            return True
-        if request.method in ('PATCH', 'PUT'):
-            return obj.user == request.user
-        if request.method == 'DELETE':
-            return BoardCollaborator.has_min_permission(
-                request.user, board, BoardCollaborator.PermissionLevel.MANAGE
-            )
-        if request.method in permissions.SAFE_METHODS:
-            return BoardCollaborator.has_min_permission(
-                request.user, board, BoardCollaborator.PermissionLevel.VIEW
-            )
-        return False
+        return BoardCollaborator.can_modify_collaborator_record(
+            request.user, obj, request.method
+        )
 
 
 class BoardCollaboratorViewSet(viewsets.ModelViewSet):
@@ -146,10 +133,17 @@ class BoardCollaboratorViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         board_id = self.kwargs.get('board_pk')
         board = Board.objects.get(id=board_id)
+        self.check_object_permissions(self.request, board)
         serializer.save(board=board)
 
     def destroy(self, request, *args, **kwargs):
-        return super(BoardCollaboratorViewSet, self).destroy(request, *args, **kwargs)
+        instance = self.get_object()
+        self.check_object_permissions(request, instance)
+        self.perform_destroy(instance)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    def perform_destroy(self, instance):
+        instance.delete()
 
 
 drf_router = routers.DefaultRouter()
