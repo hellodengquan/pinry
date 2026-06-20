@@ -421,3 +421,260 @@ class PreviewAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
         self.assertFalse(data["from_cache"])
+
+
+class LegacyErrorMessageCompatibilityTests(TestCase):
+    LEGACY_MESSAGE_MAP = {
+        PreviewErrorCode.INVALID_URL: "invalid url",
+        PreviewErrorCode.NETWORK_ERROR: "network error",
+        PreviewErrorCode.INVALID_CONTENT: "invalid image content",
+        PreviewErrorCode.CONTENT_TOO_LARGE: "content too large",
+        PreviewErrorCode.FORMAT_UNSUPPORTED: "unsupported format",
+        PreviewErrorCode.TIMEOUT: "request timeout",
+        PreviewErrorCode.AUTH_REQUIRED: "authentication required",
+        PreviewErrorCode.FORBIDDEN: "access forbidden",
+        PreviewErrorCode.NOT_FOUND: "resource not found",
+        PreviewErrorCode.UNKNOWN_ERROR: "unknown error",
+    }
+
+    def test_all_error_codes_have_legacy_mapping(self):
+        for code in PreviewErrorCode:
+            self.assertIn(
+                code,
+                self.LEGACY_MESSAGE_MAP,
+                f"Missing legacy mapping for error code: {code}",
+            )
+
+    def test_legacy_mapping_coverage_exact_match(self):
+        self.assertEqual(
+            len(self.LEGACY_MESSAGE_MAP),
+            len(PreviewErrorCode),
+            "Legacy mapping count does not match PreviewErrorCode count",
+        )
+
+    def test_each_error_code_maps_correctly(self):
+        for code, expected_message in self.LEGACY_MESSAGE_MAP.items():
+            error = PreviewError(
+                code=code,
+                message="new internal message that should be ignored",
+                field="url",
+            )
+            actual_message = preview_error_to_legacy_message(error)
+            self.assertEqual(
+                actual_message,
+                expected_message,
+                f"PreviewErrorCode.{code.name} should map to '{expected_message}', "
+                f"got '{actual_message}'",
+            )
+
+    def test_to_validation_error_dict_uses_legacy_field_name_default(self):
+        error = PreviewError(
+            code=PreviewErrorCode.INVALID_CONTENT,
+            message="ignored",
+        )
+        result = error.to_validation_error_dict()
+        self.assertEqual(result, {"url": "ignored"})
+
+    def test_to_validation_error_dict_uses_custom_field(self):
+        error = PreviewError(
+            code=PreviewErrorCode.INVALID_URL,
+            message="bad url",
+            field="referer",
+        )
+        result = error.to_validation_error_dict()
+        self.assertEqual(result, {"referer": "bad url"})
+
+    def test_preview_error_full_dict_structure(self):
+        error = PreviewError(
+            code=PreviewErrorCode.TIMEOUT,
+            message="request timeout",
+            field="url",
+            details={"timeout_seconds": 30},
+        )
+        result = error.to_dict()
+        self.assertEqual(result["code"], "timeout")
+        self.assertEqual(result["message"], "request timeout")
+        self.assertEqual(result["field"], "url")
+        self.assertEqual(result["details"], {"timeout_seconds": 30})
+
+    def test_unknown_error_falls_back_to_message(self):
+        error = PreviewError(
+            code=PreviewErrorCode.UNKNOWN_ERROR,
+            message="custom fallback message",
+        )
+        mapped = preview_error_to_legacy_message(error)
+        self.assertEqual(mapped, "unknown error")
+
+    def test_field_in_error_preserved_in_serializer_validation_error(self):
+        from rest_framework.exceptions import ValidationError
+        from core.serializers import PinSerializer
+
+        error = PreviewError(
+            code=PreviewErrorCode.FORBIDDEN,
+            message="access forbidden",
+            field="referer",
+        )
+        legacy_message = preview_error_to_legacy_message(error)
+        validation_dict = {error.field or "url": legacy_message}
+        self.assertEqual(validation_dict, {"referer": "access forbidden"})
+
+
+class PluginContractTests(TestCase):
+    def test_base_plugin_implements_all_hooks(self):
+        from pinry_plugins.batteries.base import PinryBasePlugin
+
+        class TestPlugin(PinryBasePlugin):
+            pass
+
+        plugin = TestPlugin()
+        self.assertTrue(hasattr(plugin, "process_image_pre_creation"))
+        self.assertTrue(hasattr(plugin, "process_thumbnail_pre_creation"))
+        self.assertTrue(hasattr(plugin, "preview_pre_fetch"))
+        self.assertTrue(hasattr(plugin, "preview_post_fetch"))
+        self.assertTrue(hasattr(plugin, "preview_on_error"))
+
+    def test_plugin_protocols_runtime_checkable(self):
+        from pinry_plugins.builder.contracts import (
+            ImagePluginProtocol,
+            PreviewPluginProtocol,
+            PinryPluginProtocol,
+        )
+        from pinry_plugins.batteries.base import PinryBasePlugin
+
+        class FullPlugin(PinryBasePlugin):
+            pass
+
+        plugin = FullPlugin()
+        self.assertIsInstance(plugin, ImagePluginProtocol)
+        self.assertIsInstance(plugin, PreviewPluginProtocol)
+        self.assertIsInstance(plugin, PinryPluginProtocol)
+
+    def test_plugin_capabilities_detection(self):
+        from pinry_plugins.builder.contracts import (
+            get_plugin_capabilities,
+            ALL_SUPPORTED_HOOKS,
+        )
+        from pinry_plugins.batteries.base import PinryBasePlugin
+
+        class PartialPlugin(PinryBasePlugin):
+            pass
+
+        caps = get_plugin_capabilities(PartialPlugin())
+        for hook in ALL_SUPPORTED_HOOKS:
+            self.assertTrue(caps.get(hook), f"Hook {hook} should be callable")
+
+    def test_plugin_describe_returns_full_info(self):
+        from pinry_plugins.builder.contracts import describe_plugin
+        from pinry_plugins.batteries.base import PinryBasePlugin
+
+        class DescribedPlugin(PinryBasePlugin):
+            name = "Described"
+
+        info = describe_plugin(DescribedPlugin())
+        self.assertIn("class", info)
+        self.assertIn("module", info)
+        self.assertIn("capabilities", info)
+        self.assertIn("implements_image_protocol", info)
+        self.assertIn("implements_preview_protocol", info)
+        self.assertIn("implements_full_protocol", info)
+        self.assertTrue(info["implements_full_protocol"])
+
+    def test_example_plugin_inherits_base(self):
+        from pinry_plugins.batteries.plugin_example import Plugin
+        from pinry_plugins.batteries.base import PinryBasePlugin
+
+        self.assertTrue(issubclass(Plugin, PinryBasePlugin))
+
+
+class PinLifecyclePreviewIntegrationTests(APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.user = create_user("pin_lifecycle_test")
+        self.client.login(username=self.user.username, password='password')
+
+    @mock.patch('requests.get', mock_requests_get_image)
+    def test_create_pin_uses_preview_service(self):
+        from django.core.cache import cache
+        cache.clear()
+
+        pin_url = reverse("pin-list")
+        data = {
+            "url": "http://example.com/pin-create.jpg",
+            "description": "test pin",
+            "tags": ["test"],
+        }
+        response = self.client.post(pin_url, data=data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        pin_data = response.json()
+        self.assertIsNotNone(pin_data.get("image"))
+        self.assertIsNotNone(pin_data["image"].get("id"))
+
+    @mock.patch('requests.get', mock_requests_get_invalid)
+    def test_create_pin_invalid_content_returns_legacy_error(self):
+        from django.core.cache import cache
+        cache.clear()
+
+        pin_url = reverse("pin-list")
+        data = {
+            "url": "http://example.com/bad-content.bin",
+            "description": "test",
+        }
+        response = self.client.post(pin_url, data=data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("url", response.json())
+        self.assertEqual(response.json()["url"], "invalid image content")
+
+    @mock.patch('requests.get', mock_requests_get_image)
+    def test_pin_inspect_endpoint(self):
+        from django.core.cache import cache
+        cache.clear()
+
+        pin_url = reverse("pin-list")
+        data = {
+            "url": "http://example.com/pin-inspect.jpg",
+            "description": "test inspect",
+        }
+        create_resp = self.client.post(pin_url, data=data, format="json")
+        self.assertEqual(create_resp.status_code, status.HTTP_201_CREATED)
+        pin_id = create_resp.json()["id"]
+
+        inspect_url = reverse("pin-inspect", args=[pin_id])
+        response = self.client.get(inspect_url, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertEqual(data["pin_id"], pin_id)
+        self.assertIn("cache_key", data)
+        self.assertIn("detected_service", data)
+        self.assertIn("image_id", data)
+
+    @mock.patch('requests.get', mock_requests_get_image)
+    def test_pin_refetch_endpoint(self):
+        from django.core.cache import cache
+        cache.clear()
+
+        pin_url = reverse("pin-list")
+        data = {
+            "url": "http://example.com/pin-refetch.jpg",
+            "description": "test refetch",
+        }
+        create_resp = self.client.post(pin_url, data=data, format="json")
+        self.assertEqual(create_resp.status_code, status.HTTP_201_CREATED)
+        pin_id = create_resp.json()["id"]
+
+        refetch_url = reverse("pin-refetch", args=[pin_id])
+        response = self.client.post(refetch_url, format="json")
+        self.assertIn(response.status_code, [status.HTTP_200_OK, status.HTTP_400_BAD_REQUEST])
+
+    def test_refetch_pin_without_url_returns_error(self):
+        from core.models import Pin, Image
+
+        image = Image.objects.create()
+        pin = Pin.objects.create(
+            submitter=self.user,
+            image=image,
+            description="no url pin",
+        )
+        refetch_url = reverse("pin-refetch", args=[pin.pk])
+        response = self.client.post(refetch_url, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("error", response.json())

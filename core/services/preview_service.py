@@ -180,66 +180,31 @@ class PreviewService(ABC):
         return PreviewContentType.UNKNOWN
 
     def _apply_plugins_pre_fetch(self, request: PreviewRequest) -> None:
-        from pinry_plugins.builder._loader import _plugin_instances
-
-        for plugin in _plugin_instances:
-            hook_fn = getattr(plugin, "preview_pre_fetch", None)
-            if hook_fn is None:
-                continue
-            try:
-                hook_fn(
-                    django_settings=settings,
-                    preview_request=request,
-                )
-            except Exception:
-                logger.exception(
-                    "Error in preview_pre_fetch hook for plugin %s",
-                    plugin,
-                )
+        try:
+            from pinry_plugins.builder import dispatch_preview_pre_fetch
+            dispatch_preview_pre_fetch(request)
+        except Exception:
+            logger.exception("Error dispatching preview_pre_fetch")
 
     def _apply_plugins_post_fetch(
         self, request: PreviewRequest, result: PreviewResult
     ) -> None:
-        from pinry_plugins.builder._loader import _plugin_instances
-
-        for plugin in _plugin_instances:
-            hook_fn = getattr(plugin, "preview_post_fetch", None)
-            if hook_fn is None:
-                continue
-            try:
-                plugin_data = hook_fn(
-                    django_settings=settings,
-                    preview_request=request,
-                    preview_result=result,
-                )
-                if plugin_data and isinstance(plugin_data, dict):
-                    result.plugin_data[type(plugin).__name__] = plugin_data
-            except Exception:
-                logger.exception(
-                    "Error in preview_post_fetch hook for plugin %s",
-                    plugin,
-                )
+        try:
+            from pinry_plugins.builder import dispatch_preview_post_fetch
+            plugin_data = dispatch_preview_post_fetch(request, result)
+            if plugin_data:
+                result.plugin_data.update(plugin_data)
+        except Exception:
+            logger.exception("Error dispatching preview_post_fetch")
 
     def _apply_plugins_on_error(
         self, request: PreviewRequest, error: PreviewError
     ) -> None:
-        from pinry_plugins.builder._loader import _plugin_instances
-
-        for plugin in _plugin_instances:
-            hook_fn = getattr(plugin, "preview_on_error", None)
-            if hook_fn is None:
-                continue
-            try:
-                hook_fn(
-                    django_settings=settings,
-                    preview_request=request,
-                    preview_error=error,
-                )
-            except Exception:
-                logger.exception(
-                    "Error in preview_on_error hook for plugin %s",
-                    plugin,
-                )
+        try:
+            from pinry_plugins.builder import dispatch_preview_on_error
+            dispatch_preview_on_error(request, error)
+        except Exception:
+            logger.exception("Error dispatching preview_on_error")
 
 
 class ImagePreviewService(PreviewService):

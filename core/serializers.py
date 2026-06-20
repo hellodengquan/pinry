@@ -124,6 +124,36 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
         required=False,
     )
 
+    def _preview_and_get_image(self, url, referer, force_refresh=False):
+        preview_manager = get_preview_manager()
+        try:
+            result = preview_manager.preview(
+                url=url,
+                referer=referer,
+                content_type_hint=PreviewContentType.IMAGE,
+                force_refresh=force_refresh,
+            )
+        except PreviewError as e:
+            legacy_message = preview_error_to_legacy_message(e)
+            raise ValidationError({e.field or "url": legacy_message})
+
+        if result.image_id is None:
+            preview_manager.invalidate_cache_for_url(url, referer)
+            raise ValidationError({"url": "invalid image content"})
+        try:
+            return Image.objects.get(pk=result.image_id)
+        except Image.DoesNotExist:
+            preview_manager.invalidate_cache_for_url(url, referer)
+            result = preview_manager.preview(
+                url=url,
+                referer=referer,
+                content_type_hint=PreviewContentType.IMAGE,
+                force_refresh=True,
+            )
+            if result.image_id is None:
+                raise ValidationError({"url": "invalid image content"})
+            return Image.objects.get(pk=result.image_id)
+
     def create(self, validated_data):
         if 'url' not in validated_data and\
                 'image_by_id' not in validated_data:
@@ -137,32 +167,7 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
         if 'url' in validated_data and validated_data['url']:
             url = validated_data['url']
             referer = validated_data.get('referer', url)
-            try:
-                preview_manager = get_preview_manager()
-                result = preview_manager.preview(
-                    url=url,
-                    referer=referer,
-                    content_type_hint=PreviewContentType.IMAGE,
-                )
-                if result.image_id is None:
-                    preview_manager.invalidate_cache_for_url(url, referer)
-                    raise ValidationError({"url": "invalid image content"})
-                try:
-                    image = Image.objects.get(pk=result.image_id)
-                except Image.DoesNotExist:
-                    preview_manager.invalidate_cache_for_url(url, referer)
-                    result = preview_manager.preview(
-                        url=url,
-                        referer=referer,
-                        content_type_hint=PreviewContentType.IMAGE,
-                        force_refresh=True,
-                    )
-                    if result.image_id is None:
-                        raise ValidationError({"url": "invalid image content"})
-                    image = Image.objects.get(pk=result.image_id)
-            except PreviewError as e:
-                legacy_message = preview_error_to_legacy_message(e)
-                raise ValidationError({e.field or "url": legacy_message})
+            image = self._preview_and_get_image(url, referer, force_refresh=False)
         else:
             image = validated_data.pop("image_by_id")
         tags = validated_data.pop('tag_list', [])
@@ -177,8 +182,18 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
             instance.tags.set(*tags)
         else:
             instance.tags.set()
-        # change for image-id or image is not allowed
         validated_data.pop('image_by_id', None)
+
+        new_url = validated_data.get('url')
+        if new_url and new_url != instance.url:
+            referer = validated_data.get('referer', new_url)
+            try:
+                new_image = self._preview_and_get_image(new_url, referer)
+                validated_data['image'] = new_image
+            except PreviewError as e:
+                legacy_message = preview_error_to_legacy_message(e)
+                raise ValidationError({e.field or "url": legacy_message})
+
         return super(PinSerializer, self).update(instance, validated_data)
 
 

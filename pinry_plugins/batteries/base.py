@@ -1,15 +1,23 @@
+from abc import ABC
 from typing import Any, Dict, Optional
 
 from core.models import Image
-from core.services.preview_service import PreviewError, PreviewRequest, PreviewResult
+from core.services.preview_service import (
+    PreviewError,
+    PreviewRequest,
+    PreviewResult,
+)
 from django_images.models import Thumbnail
-from pinry_plugins.batteries.base import PinryBasePlugin
 
 
-class Plugin(PinryBasePlugin):
-    name = "ExamplePlugin"
-    version = "1.0.0"
-    description = "Example plugin demonstrating all available hooks"
+class PinryBasePlugin(ABC):
+    name: str = ""
+    version: str = "0.1.0"
+    description: str = ""
+
+    def __init__(self) -> None:
+        if not self.name:
+            self.name = type(self).__name__
 
     def process_image_pre_creation(
         self,

@@ -40,6 +40,73 @@ class PinViewSet(viewsets.ModelViewSet):
         request = self.request
         return filter_private_pin(request, query)
 
+    def create(self, request, *args, **kwargs):
+        preview_manager = get_preview_manager()
+        url = request.data.get("url")
+        referer = request.data.get("referer")
+        if url:
+            preview_manager.invalidate_cache_for_url(url, referer)
+        return super(PinViewSet, self).create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+        new_url = request.data.get("url")
+        if new_url and new_url != instance.url:
+            preview_manager = get_preview_manager()
+            referer = request.data.get("referer", new_url)
+            preview_manager.invalidate_cache_for_url(new_url, referer)
+            preview_manager.invalidate_cache_for_url(instance.url, instance.referer)
+        return super(PinViewSet, self).update(request, partial=partial, *args, **kwargs)
+
+    @action(detail=True, methods=['post'], url_path='refetch')
+    def refetch(self, request, pk=None):
+        pin = self.get_object()
+        if not pin.url:
+            return Response(
+                {"error": "Pin has no url to refetch"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        preview_manager = get_preview_manager()
+        try:
+            result = preview_manager.refresh(
+                url=pin.url,
+                referer=pin.referer,
+                content_type_hint=PreviewContentType.IMAGE,
+            )
+        except PreviewError as e:
+            return Response(
+                {"error": e.to_dict()},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if result.image_id and result.image_id != pin.image_id:
+            try:
+                from core.models import Image
+                new_image = Image.objects.get(pk=result.image_id)
+                pin.image = new_image
+                pin.save()
+            except Image.DoesNotExist:
+                pass
+        serializer = self.get_serializer(pin)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['get'], url_path='inspect')
+    def inspect(self, request, pk=None):
+        pin = self.get_object()
+        preview_manager = get_preview_manager()
+        info = preview_manager.inspect(
+            url=pin.url or "",
+            referer=pin.referer,
+            content_type_hint=PreviewContentType.IMAGE,
+        )
+        info.update({
+            "pin_id": pin.pk,
+            "pin_url": pin.url,
+            "pin_referer": pin.referer,
+            "image_id": pin.image_id,
+        })
+        return Response(info, status=status.HTTP_200_OK)
+
 
 class BoardViewSet(viewsets.ModelViewSet):
     serializer_class = api.BoardSerializer
