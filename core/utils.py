@@ -8,6 +8,26 @@ from django.conf import settings
 
 DEFAULT_EXCLUDE_DIRS = {'.git', '.svn', '.hg', '.DS_Store', '__pycache__', 'node_modules', 'tmp', 'temp'}
 DEFAULT_MAX_DEPTH = 10
+DEFAULT_AUDIT_LOG_RETENTION_DAYS = 90
+
+
+def _get_setting(name, default):
+    return getattr(settings, name, default)
+
+
+def get_exclude_dirs():
+    config_exclude = _get_setting('MEDIA_CHECK_EXCLUDE_DIRS', None)
+    if config_exclude is None:
+        return set(DEFAULT_EXCLUDE_DIRS)
+    return set(DEFAULT_EXCLUDE_DIRS) | set(config_exclude)
+
+
+def get_max_depth():
+    return _get_setting('MEDIA_CHECK_MAX_DEPTH', DEFAULT_MAX_DEPTH)
+
+
+def get_audit_log_retention_days():
+    return _get_setting('MEDIA_CHECK_AUDIT_RETENTION_DAYS', DEFAULT_AUDIT_LOG_RETENTION_DAYS)
 
 
 def upload_path(instance, filename, **kwargs):
@@ -25,10 +45,13 @@ def upload_path(instance, filename, **kwargs):
     }
 
 
-def get_all_media_files(max_depth=DEFAULT_MAX_DEPTH, exclude_dirs=None):
-    effective_exclude_dirs = set(DEFAULT_EXCLUDE_DIRS)
+def get_all_media_files(max_depth=None, exclude_dirs=None):
+    if max_depth is None:
+        max_depth = get_max_depth()
+
+    effective_exclude_dirs = get_exclude_dirs()
     if exclude_dirs is not None:
-        effective_exclude_dirs.update(exclude_dirs)
+        effective_exclude_dirs = effective_exclude_dirs | set(exclude_dirs)
 
     media_root = settings.MEDIA_ROOT
     all_files = set()
@@ -82,19 +105,26 @@ def check_pins_without_valid_image():
     return pins_without_image
 
 
-def get_orphan_files(max_depth=DEFAULT_MAX_DEPTH, exclude_dirs=None):
+def get_orphan_files(max_depth=None, exclude_dirs=None):
     all_media_files = get_all_media_files(max_depth=max_depth, exclude_dirs=exclude_dirs)
     all_db_files = get_all_db_images()
     return all_media_files - all_db_files
 
 
-def get_missing_files(max_depth=DEFAULT_MAX_DEPTH, exclude_dirs=None):
+def get_missing_files(max_depth=None, exclude_dirs=None):
     all_media_files = get_all_media_files(max_depth=max_depth, exclude_dirs=exclude_dirs)
     all_db_files = get_all_db_images()
     return all_db_files - all_media_files
 
 
-def run_media_check(max_depth=DEFAULT_MAX_DEPTH, exclude_dirs=None):
+def run_media_check(max_depth=None, exclude_dirs=None):
+    if max_depth is None:
+        max_depth = get_max_depth()
+
+    effective_exclude_dirs = get_exclude_dirs()
+    if exclude_dirs is not None:
+        effective_exclude_dirs = effective_exclude_dirs | set(exclude_dirs)
+
     media_root = settings.MEDIA_ROOT
     all_media_files = get_all_media_files(max_depth=max_depth, exclude_dirs=exclude_dirs)
     all_db_files = get_all_db_images()
@@ -115,7 +145,7 @@ def run_media_check(max_depth=DEFAULT_MAX_DEPTH, exclude_dirs=None):
         'media_root': media_root,
         'scan_time': datetime.datetime.now().isoformat(),
         'max_depth': max_depth,
-        'exclude_dirs': sorted(list(exclude_dirs if exclude_dirs else DEFAULT_EXCLUDE_DIRS)),
+        'exclude_dirs': sorted(list(effective_exclude_dirs)),
         'total_files': len(all_media_files),
         'total_db_files': len(all_db_files),
         'orphan_count': len(orphan_files),
@@ -133,7 +163,7 @@ def save_report(report, output_path):
     return output_path
 
 
-def delete_orphan_files(max_depth=DEFAULT_MAX_DEPTH, exclude_dirs=None):
+def delete_orphan_files(max_depth=None, exclude_dirs=None):
     orphan_files = get_orphan_files(max_depth=max_depth, exclude_dirs=exclude_dirs)
     media_root = settings.MEDIA_ROOT
     deleted = []
@@ -157,7 +187,7 @@ def delete_orphan_files(max_depth=DEFAULT_MAX_DEPTH, exclude_dirs=None):
     }
 
 
-def fix_missing_files(max_depth=DEFAULT_MAX_DEPTH, exclude_dirs=None):
+def fix_missing_files(max_depth=None, exclude_dirs=None):
     from django_images.models import Image, Thumbnail
     from core.models import Pin
 
@@ -202,3 +232,102 @@ def fix_missing_files(max_depth=DEFAULT_MAX_DEPTH, exclude_dirs=None):
         'fixed_pins': fixed_pins,
         'errors': errors,
     }
+
+
+class MediaCheckRenderer:
+    def __init__(self, report, orphan_result=None, missing_result=None):
+        self.report = report
+        self.orphan_result = orphan_result
+        self.missing_result = missing_result
+
+    def _get_summary_fields(self):
+        return [
+            ('media_root', '媒体根目录', self.report.get('media_root', '')),
+            ('scan_time', '扫描时间', self.report.get('scan_time', '')),
+            ('max_depth', '最大扫描深度', str(self.report.get('max_depth', ''))),
+            ('exclude_dirs', '排除目录', ', '.join(self.report.get('exclude_dirs', []))),
+            ('total_files', '文件系统中的文件总数', str(self.report.get('total_files', 0))),
+            ('total_db_files', '数据库中的文件总数', str(self.report.get('total_db_files', 0))),
+            ('orphan_count', '孤儿文件数量', str(self.report.get('orphan_count', 0))),
+            ('missing_count', '缺失文件数量', str(self.report.get('missing_count', 0))),
+        ]
+
+    def to_json(self):
+        result = dict(self.report)
+        if self.orphan_result is not None:
+            result['delete_orphans_result'] = self.orphan_result
+        if self.missing_result is not None:
+            result['fix_missing_result'] = self.missing_result
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    def to_dict(self):
+        result = dict(self.report)
+        if self.orphan_result is not None:
+            result['delete_orphans_result'] = self.orphan_result
+        if self.missing_result is not None:
+            result['fix_missing_result'] = self.missing_result
+        return result
+
+    def to_text(self, quiet=False):
+        lines = []
+
+        for key, label, value in self._get_summary_fields():
+            lines.append(f'{label}: {value}')
+
+        lines.append('')
+        lines.append('=== 巡检结果 ===')
+        lines.append(f'文件系统中的文件总数: {self.report.get("total_files", 0)}')
+        lines.append(f'数据库中的文件总数: {self.report.get("total_db_files", 0)}')
+        lines.append(f'孤儿文件数量: {self.report.get("orphan_count", 0)}')
+        lines.append(f'缺失文件数量: {self.report.get("missing_count", 0)}')
+        lines.append('')
+
+        if not quiet and self.report.get('orphan_files'):
+            lines.append('=== 孤儿文件列表 ===')
+            for file_info in self.report['orphan_files']:
+                lines.append(f'  - {file_info["path"]} ({file_info["size"]} bytes)')
+            lines.append('')
+
+        if not quiet and self.report.get('missing_files'):
+            lines.append('=== 缺失文件列表 ===')
+            for file in self.report['missing_files']:
+                lines.append(f'  - {file}')
+            lines.append('')
+
+        pins = self.report.get('pins_without_image', [])
+        if pins:
+            lines.append(f'=== 缺少图片的Pin ({len(pins)} 个) ===')
+            if not quiet:
+                for pin in pins:
+                    lines.append(
+                        f'  - Pin #{pin["id"]} by {pin["submitter"]}: {pin["description"]}'
+                    )
+            lines.append('')
+
+        if self.orphan_result is not None:
+            lines.append('=== 删除孤儿文件结果 ===')
+            lines.append(f'已删除: {self.orphan_result.get("deleted_count", 0)} 个')
+            if not quiet and self.orphan_result.get('deleted_files'):
+                for file in self.orphan_result['deleted_files']:
+                    lines.append(f'  ✓ {file}')
+            if self.orphan_result.get('errors'):
+                lines.append(f'失败: {len(self.orphan_result["errors"])} 个')
+                if not quiet:
+                    for error in self.orphan_result['errors']:
+                        lines.append(f'  ✗ {error["path"]}: {error["error"]}')
+            lines.append('')
+
+        if self.missing_result is not None:
+            lines.append('=== 修复缺失文件结果 ===')
+            lines.append(f'删除Image记录: {self.missing_result.get("fixed_images", 0)} 个')
+            lines.append(f'删除Thumbnail记录: {self.missing_result.get("fixed_thumbnails", 0)} 个')
+            lines.append(f'删除Pin记录: {self.missing_result.get("fixed_pins", 0)} 个')
+            if self.missing_result.get('errors'):
+                lines.append(f'失败: {len(self.missing_result["errors"])} 个')
+                if not quiet:
+                    for error in self.missing_result['errors']:
+                        lines.append(f'  ✗ {error["path"]} ({error["type"]}): {error["error"]}')
+            lines.append('')
+
+        lines.append('巡检完成！')
+        return '\n'.join(lines)

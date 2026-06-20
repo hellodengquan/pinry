@@ -333,3 +333,39 @@ class FixMissingResultSerializer(serializers.Serializer):
     fixed_thumbnails = serializers.IntegerField()
     fixed_pins = serializers.IntegerField()
     errors = serializers.ListField(child=serializers.DictField())
+
+
+class MediaCheckAuditLogSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    action = serializers.CharField()
+    media_root = serializers.CharField()
+    scan_time = serializers.DateTimeField()
+    max_depth = serializers.IntegerField()
+    total_files = serializers.IntegerField()
+    total_db_files = serializers.IntegerField()
+    orphan_count = serializers.IntegerField()
+    missing_count = serializers.IntegerField()
+    pins_without_image_count = serializers.IntegerField()
+    success = serializers.BooleanField()
+    initiated_by = serializers.StringRelatedField(read_only=True)
+
+
+class MediaCheckAuditLogDetailSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    action = serializers.CharField()
+    media_root = serializers.CharField()
+    scan_time = serializers.DateTimeField()
+    max_depth = serializers.IntegerField()
+    total_files = serializers.IntegerField()
+    total_db_files = serializers.IntegerField()
+    orphan_count = serializers.IntegerField()
+    missing_count = serializers.IntegerField()
+    pins_without_image_count = serializers.IntegerField()
+    details = serializers.DictField()
+    success = serializers.BooleanField()
+    error_message = serializers.CharField()
+    initiated_by = serializers.StringRelatedField(read_only=True)
+
+
+class MediaCheckAuditCleanupSerializer(serializers.Serializer):
+    retention_days = serializers.IntegerField(required=False, min_value=1)
