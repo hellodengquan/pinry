@@ -103,6 +103,24 @@ class BoardCollaborator(models.Model):
         EDIT = 'edit', 'Edit'
         MANAGE = 'manage', 'Manage'
 
+    PERMISSION_LEVELS = PermissionLevel  # alias for backwards compatibility
+
+    _PERMISSION_HIERARCHY = {
+        PermissionLevel.VIEW: 1,
+        PermissionLevel.EDIT: 2,
+        PermissionLevel.MANAGE: 3,
+    }
+
+    _METHOD_PERMISSION_MAP = {
+        'GET': PermissionLevel.VIEW,
+        'HEAD': PermissionLevel.VIEW,
+        'OPTIONS': PermissionLevel.VIEW,
+        'POST': PermissionLevel.EDIT,
+        'PATCH': PermissionLevel.EDIT,
+        'PUT': PermissionLevel.EDIT,
+        'DELETE': PermissionLevel.MANAGE,
+    }
+
     class Meta:
         unique_together = ("board", "user")
 
@@ -113,6 +131,30 @@ class BoardCollaborator(models.Model):
         choices=PermissionLevel.choices,
         default=PermissionLevel.VIEW,
     )
+
+    @classmethod
+    def get_permission_level(cls, user, board):
+        if user == board.submitter:
+            return cls.PermissionLevel.MANAGE
+        collab = cls.objects.filter(board=board, user=user).first()
+        if collab:
+            return collab.permission
+        return None
+
+    @classmethod
+    def has_permission_for_method(cls, user, board, method):
+        perm = cls.get_permission_level(user, board)
+        if perm is None:
+            return False
+        required = cls._METHOD_PERMISSION_MAP.get(method, cls.PermissionLevel.MANAGE)
+        return cls._PERMISSION_HIERARCHY[perm] >= cls._PERMISSION_HIERARCHY[required]
+
+    @classmethod
+    def has_min_permission(cls, user, board, required_perm):
+        perm = cls.get_permission_level(user, board)
+        if perm is None:
+            return False
+        return cls._PERMISSION_HIERARCHY[perm] >= cls._PERMISSION_HIERARCHY[required_perm]
 
 
 class Pin(models.Model):

@@ -2,6 +2,22 @@ from django.db import migrations, models
 import django.db.models.deletion
 
 
+def get_permission_choices():
+    return [
+        ('view', 'View'),
+        ('edit', 'Edit'),
+        ('manage', 'Manage'),
+    ]
+
+
+def _noop_forward(apps, schema_editor):
+    pass
+
+
+def _noop_backward(apps, schema_editor):
+    pass
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -15,7 +31,7 @@ class Migration(migrations.Migration):
             fields=[
                 ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('permission', models.CharField(
-                    choices=[('view', 'View'), ('edit', 'Edit'), ('manage', 'Manage')],
+                    choices=get_permission_choices(),
                     default='view',
                     max_length=10,
                 )),
@@ -23,7 +39,11 @@ class Migration(migrations.Migration):
                 ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='board_collaborations', to='users.User')),
             ],
             options={
-                'unique_together': {('board', 'user')},
+                'unique_together': (('board', 'user'),),
             },
+        ),
+        migrations.RunPython(
+            code=_noop_forward,
+            reverse_code=_noop_backward,
         ),
     ]

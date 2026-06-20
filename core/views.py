@@ -1,7 +1,7 @@
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_page
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework import viewsets, mixins, routers
+from rest_framework import viewsets, mixins, routers, permissions
 from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.permissions import BasePermission
 from rest_framework.viewsets import GenericViewSet
@@ -95,6 +95,14 @@ class BoardCollaboratorPermission(BasePermission):
             return False
         if request.method in ('POST',):
             return request.user == board.submitter
+        if request.method == 'DELETE':
+            return BoardCollaborator.has_min_permission(
+                request.user, board, BoardCollaborator.PermissionLevel.MANAGE
+            )
+        if request.method in permissions.SAFE_METHODS:
+            return BoardCollaborator.has_min_permission(
+                request.user, board, BoardCollaborator.PermissionLevel.VIEW
+            )
         return True
 
     def has_object_permission(self, request, view, obj):
@@ -103,12 +111,23 @@ class BoardCollaboratorPermission(BasePermission):
             return True
         if request.method in ('PATCH', 'PUT'):
             return obj.user == request.user
-        return True
+        if request.method == 'DELETE':
+            return BoardCollaborator.has_min_permission(
+                request.user, board, BoardCollaborator.PermissionLevel.MANAGE
+            )
+        if request.method in permissions.SAFE_METHODS:
+            return BoardCollaborator.has_min_permission(
+                request.user, board, BoardCollaborator.PermissionLevel.VIEW
+            )
+        return False
 
 
 class BoardCollaboratorViewSet(viewsets.ModelViewSet):
     serializer_class = api.BoardCollaboratorSerializer
     permission_classes = [BoardCollaboratorPermission]
+    http_method_names = ['get', 'post', 'patch', 'put', 'delete', 'head', 'options']
+    lookup_field = 'pk'
+    lookup_url_kwarg = 'pk'
 
     def get_queryset(self):
         board_id = self.kwargs.get('board_pk')
@@ -128,6 +147,9 @@ class BoardCollaboratorViewSet(viewsets.ModelViewSet):
         board_id = self.kwargs.get('board_pk')
         board = Board.objects.get(id=board_id)
         serializer.save(board=board)
+
+    def destroy(self, request, *args, **kwargs):
+        return super(BoardCollaboratorViewSet, self).destroy(request, *args, **kwargs)
 
 
 drf_router = routers.DefaultRouter()

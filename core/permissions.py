@@ -3,15 +3,6 @@ from rest_framework import permissions
 from core.models import BoardCollaborator
 
 
-def get_collaborator_permission(user, board):
-    if user == board.submitter:
-        return BoardCollaborator.PermissionLevel.MANAGE
-    collab = BoardCollaborator.objects.filter(board=board, user=user).first()
-    if collab:
-        return collab.permission
-    return None
-
-
 class IsOwnerOrReadOnly(permissions.IsAuthenticatedOrReadOnly):
     def __init__(self, owner_field_name="owner"):
         self.__owner_field_name = owner_field_name
@@ -27,11 +18,9 @@ class IsOwnerOrReadOnly(permissions.IsAuthenticatedOrReadOnly):
             return True
 
         if hasattr(obj, 'collaborators'):
-            perm = get_collaborator_permission(request.user, obj)
-            if perm == BoardCollaborator.PermissionLevel.EDIT:
-                return request.method in ('PATCH', 'PUT', 'POST')
-            if perm == BoardCollaborator.PermissionLevel.MANAGE:
-                return True
+            return BoardCollaborator.has_permission_for_method(
+                request.user, obj, request.method
+            )
 
         return False
 
@@ -49,7 +38,7 @@ class OwnerOnlyIfPrivate(permissions.BasePermission):
         if request.user == getattr(obj, self.__owner_field_name):
             return True
         if hasattr(obj, 'collaborators'):
-            perm = get_collaborator_permission(request.user, obj)
+            perm = BoardCollaborator.get_permission_level(request.user, obj)
             return perm is not None
         return False
 
