@@ -7,15 +7,22 @@ def _board_to_legacy_field_forward(apps, schema_editor):
     BoardCollaborator = apps.get_model('core', 'BoardCollaborator')
 
     for board in Board.objects.all():
+        if board is None or board.id is None:
+            continue
         legacy_data = []
         for collab in BoardCollaborator.objects.filter(board=board):
+            if collab is None or collab.user_id is None:
+                continue
             legacy_data.append({
                 'user_id': collab.user_id,
-                'permission': collab.permission,
+                'permission': collab.permission or 'view',
             })
         if legacy_data:
-            board._legacy_collaborators = json.dumps(legacy_data)
-            board.save(update_fields=['_legacy_collaborators'])
+            try:
+                board._legacy_collaborators = json.dumps(legacy_data)
+                board.save(update_fields=['_legacy_collaborators'])
+            except Exception:
+                pass
 
 
 def _board_to_legacy_field_backward(apps, schema_editor):
@@ -23,18 +30,30 @@ def _board_to_legacy_field_backward(apps, schema_editor):
     BoardCollaborator = apps.get_model('core', 'BoardCollaborator')
 
     for board in Board.objects.all():
+        if board is None or board.id is None:
+            continue
         try:
             legacy_data = json.loads(board._legacy_collaborators)
         except (ValueError, TypeError):
             legacy_data = []
+        if not isinstance(legacy_data, list):
+            continue
         for item in legacy_data:
-            BoardCollaborator.objects.get_or_create(
-                board=board,
-                user_id=item.get('user_id'),
-                defaults={
-                    'permission': item.get('permission', 'view'),
-                },
-            )
+            if not isinstance(item, dict):
+                continue
+            user_id = item.get('user_id')
+            if user_id is None:
+                continue
+            try:
+                BoardCollaborator.objects.get_or_create(
+                    board=board,
+                    user_id=user_id,
+                    defaults={
+                        'permission': item.get('permission', 'view'),
+                    },
+                )
+            except Exception:
+                continue
 
 
 class Migration(migrations.Migration):

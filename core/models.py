@@ -164,8 +164,26 @@ class BoardCollaborator(models.Model):
         return cls._PERMISSION_HIERARCHY[perm] >= cls._PERMISSION_HIERARCHY[required_perm]
 
     @classmethod
+    def has_strictly_higher_permission(cls, user, board, compare_perm):
+        perm = cls.get_permission_level(user, board)
+        if perm is None or compare_perm is None:
+            return False
+        return cls._PERMISSION_HIERARCHY[perm] > cls._PERMISSION_HIERARCHY[compare_perm]
+
+    @classmethod
     def can_manage_collaborator(cls, user, board):
         return cls.has_min_permission(user, board, cls.PermissionLevel.MANAGE)
+
+    @classmethod
+    def can_delete_collaborator(cls, actor, target_record):
+        if target_record.user_id == actor.id:
+            return True
+        board = target_record.board
+        if actor == board.submitter:
+            return True
+        return cls.has_strictly_higher_permission(
+            actor, board, target_record.permission
+        )
 
     @classmethod
     def can_modify_collaborator_record(cls, user, collaborator_record, method):
@@ -173,13 +191,7 @@ class BoardCollaborator(models.Model):
         if user == board.submitter:
             return True
         if method == 'DELETE':
-            if collaborator_record.user == user:
-                return True
-            actor_perm = cls.get_permission_level(user, board)
-            target_perm = collaborator_record.permission
-            if actor_perm is None or target_perm is None:
-                return False
-            return cls._PERMISSION_HIERARCHY[actor_perm] > cls._PERMISSION_HIERARCHY[target_perm]
+            return cls.can_delete_collaborator(user, collaborator_record)
         required = cls._METHOD_PERMISSION_MAP.get(method, cls.PermissionLevel.MANAGE)
         if not cls.has_min_permission(user, board, required):
             return False

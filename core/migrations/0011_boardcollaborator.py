@@ -66,33 +66,56 @@ def _forward_migrate(apps, schema_editor):
 
     if backup_exists and backup_model.objects.exists():
         for record in backup_model.objects.all():
-            BoardCollaborator.objects.get_or_create(
-                board_id=record.board_id,
-                user_id=record.user_id,
-                defaults={
-                    'permission': record.permission,
-                },
-            )
-        backup_model.objects.all().delete()
+            if not record.board_id or not record.user_id:
+                continue
+            try:
+                BoardCollaborator.objects.get_or_create(
+                    board_id=record.board_id,
+                    user_id=record.user_id,
+                    defaults={
+                        'permission': record.permission or 'view',
+                    },
+                )
+            except Exception:
+                continue
+        try:
+            backup_model.objects.all().delete()
+        except Exception:
+            pass
 
     if _board_has_legacy_field(schema_editor):
         Board = apps.get_model('core', 'Board')
         for board in Board.objects.all():
+            if board is None or board.id is None:
+                continue
             try:
                 legacy_data = json.loads(board._legacy_collaborators)
             except (ValueError, TypeError):
                 legacy_data = []
+            if not isinstance(legacy_data, list):
+                continue
             for item in legacy_data:
-                BoardCollaborator.objects.get_or_create(
-                    board_id=board.id,
-                    user_id=item.get('user_id'),
-                    defaults={
-                        'permission': item.get('permission', 'view'),
-                    },
-                )
+                if not isinstance(item, dict):
+                    continue
+                user_id = item.get('user_id')
+                if user_id is None:
+                    continue
+                try:
+                    BoardCollaborator.objects.get_or_create(
+                        board_id=board.id,
+                        user_id=user_id,
+                        defaults={
+                            'permission': item.get('permission', 'view'),
+                        },
+                    )
+                except Exception:
+                    continue
             if legacy_data:
-                board._legacy_collaborators = '[]'
-                board.save(update_fields=['_legacy_collaborators'])
+                try:
+                    board._legacy_collaborators = '[]'
+                    board.save(update_fields=['_legacy_collaborators'])
+                except Exception:
+                    pass
 
 
 def _backward_migrate(apps, schema_editor):
@@ -101,35 +124,54 @@ def _backward_migrate(apps, schema_editor):
 
     collab_data_by_board = {}
     for collab in BoardCollaborator.objects.all():
-        backup_model.objects.create(
-            board_id=collab.board_id,
-            user_id=collab.user_id,
-            permission=collab.permission,
-            payload=json.dumps({
-                'id': collab.id,
-                'board_id': collab.board_id,
-                'user_id': collab.user_id,
-                'permission': collab.permission,
-            }),
-        )
+        if collab is None or collab.board_id is None or collab.user_id is None:
+            continue
+        try:
+            backup_model.objects.create(
+                board_id=collab.board_id,
+                user_id=collab.user_id,
+                permission=collab.permission or 'view',
+                payload=json.dumps({
+                    'id': collab.id,
+                    'board_id': collab.board_id,
+                    'user_id': collab.user_id,
+                    'permission': collab.permission or 'view',
+                }),
+            )
+        except Exception:
+            continue
         if collab.board_id not in collab_data_by_board:
             collab_data_by_board[collab.board_id] = []
         collab_data_by_board[collab.board_id].append({
             'user_id': collab.user_id,
-            'permission': collab.permission,
+            'permission': collab.permission or 'view',
         })
 
     if _board_has_legacy_field(schema_editor):
         Board = apps.get_model('core', 'Board')
         for board in Board.objects.all():
+            if board is None or board.id is None:
+                continue
             data = collab_data_by_board.get(board.id, [])
             try:
                 existing = json.loads(board._legacy_collaborators)
+                if not isinstance(existing, list):
+                    existing = []
             except (ValueError, TypeError):
                 existing = []
-            combined = existing + data
-            board._legacy_collaborators = json.dumps(combined)
-            board.save(update_fields=['_legacy_collaborators'])
+            existing_user_ids = {
+                item.get('user_id') for item in existing if isinstance(item, dict)
+            }
+            combined = list(existing)
+            for item in data:
+                if item.get('user_id') in existing_user_ids:
+                    continue
+                combined.append(item)
+            try:
+                board._legacy_collaborators = json.dumps(combined)
+                board.save(update_fields=['_legacy_collaborators'])
+            except Exception:
+                pass
 
 
 class Migration(migrations.Migration):
