@@ -7,6 +7,8 @@ from users.models import User, create_token_if_necessary
 
 
 class PublicUserSerializer(serializers.HyperlinkedModelSerializer):
+    url_field_name = settings.DRF_URL_FIELD_NAME
+    
     class Meta:
         model = User
         fields = (
@@ -22,6 +24,8 @@ class PublicUserSerializer(serializers.HyperlinkedModelSerializer):
 
 
 class UserSerializer(serializers.HyperlinkedModelSerializer):
+    url_field_name = settings.DRF_URL_FIELD_NAME
+    
     class Meta:
         model = User
         fields = (

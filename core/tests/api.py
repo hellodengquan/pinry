@@ -116,6 +116,127 @@ class BoardPrivacyTests(APITestCase):
         self.assertEqual(resp.json()['total_pins'], 1, resp.json())
 
 
+class BoardPinPrivacyTests(APITestCase):
+
+    def setUp(self):
+        super(BoardPinPrivacyTests, self).setUp()
+        self.owner = create_user("board_owner")
+        self.other_user = create_user("other_user")
+
+        self.public_board = Board.objects.create(
+            name="public_board",
+            submitter=self.owner,
+            private=False,
+        )
+        self.board_url = reverse("board-detail", kwargs={"pk": self.public_board.pk})
+        self.pins_url = reverse("pin-list")
+
+        self._create_pins_for_board()
+
+    def tearDown(self):
+        _teardown_models()
+
+    def _create_pins_for_board(self):
+        self.public_pin_1 = create_pin(self.owner, image=create_image(), tags=[])
+        self.public_pin_1.private = False
+        self.public_pin_1.save()
+        self.public_board.pins.add(self.public_pin_1)
+
+        self.private_pin_owner = create_pin(self.owner, image=create_image(), tags=[])
+        self.private_pin_owner.private = True
+        self.private_pin_owner.save()
+        self.public_board.pins.add(self.private_pin_owner)
+
+        self.public_pin_other = create_pin(self.other_user, image=create_image(), tags=[])
+        self.public_pin_other.private = False
+        self.public_pin_other.save()
+        self.public_board.pins.add(self.public_pin_other)
+
+        self.private_pin_other = create_pin(self.other_user, image=create_image(), tags=[])
+        self.private_pin_other.private = True
+        self.private_pin_other.save()
+        self.public_board.pins.add(self.private_pin_other)
+
+        self.public_board.save()
+
+    def test_anonymous_user_board_total_pins_excludes_private_pins(self):
+        resp = self.client.get(self.board_url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['total_pins'], 2, resp.json())
+
+    def test_anonymous_user_board_cover_excludes_private_pins(self):
+        self.public_board.pins.clear()
+        self.public_board.pins.add(self.private_pin_owner)
+        self.public_board.pins.add(self.public_pin_1)
+        self.public_board.save()
+
+        resp = self.client.get(self.board_url)
+        self.assertEqual(resp.status_code, 200)
+        cover = resp.json()['cover']
+        self.assertIsNotNone(cover)
+        self.assertEqual(cover['id'], self.public_pin_1.id)
+        self.assertFalse(cover['private'])
+
+    def test_anonymous_user_board_cover_is_none_when_all_pins_private(self):
+        self.public_board.pins.clear()
+        self.public_board.pins.add(self.private_pin_owner)
+        self.public_board.save()
+
+        resp = self.client.get(self.board_url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNone(resp.json()['cover'])
+
+    def test_anonymous_user_pins_list_for_board_excludes_private_pins(self):
+        url = f"{self.pins_url}?pins__id={self.public_board.pk}"
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        if isinstance(data, dict):
+            self.assertEqual(data['count'], 2, data)
+            results = data['results']
+        else:
+            results = data
+        self.assertEqual(len(results), 2, data)
+        for pin in results:
+            self.assertFalse(pin['private'])
+
+    def test_owner_can_see_own_private_pins_in_board(self):
+        self.client.login(username=self.owner.username, password='password')
+
+        resp = self.client.get(self.board_url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['total_pins'], 3, resp.json())
+
+        url = f"{self.pins_url}?pins__id={self.public_board.pk}"
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        if isinstance(data, dict):
+            self.assertEqual(data['count'], 3, data)
+            results = data['results']
+        else:
+            results = data
+        self.assertEqual(len(results), 3, data)
+
+    def test_other_logged_in_user_cannot_see_private_pins_of_owner_in_board(self):
+        self.client.login(username=self.other_user.username, password='password')
+
+        resp = self.client.get(self.board_url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['total_pins'], 3, resp.json())
+
+        url = f"{self.pins_url}?pins__id={self.public_board.pk}"
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        if isinstance(data, dict):
+            self.assertEqual(data['count'], 3, data)
+            results = data['results']
+        else:
+            results = data
+        self.assertEqual(len(results), 3, data)
+
+
 class PinPrivacyTests(APITestCase):
 
     def setUp(self):

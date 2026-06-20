@@ -154,7 +154,6 @@ DRF_URL_FIELD_NAME = "resource_link"
 REST_FRAMEWORK = {
     # Use Django's standard `django.contrib.auth` permissions,
     # or allow read-only access for unauthenticated users.
-    'DEFAULT_SCHEMA_CLASS': 'rest_framework.schemas.coreapi.AutoSchema',
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticatedOrReadOnly'
     ],
@@ -170,3 +169,15 @@ REST_FRAMEWORK = {
         'rest_framework.authentication.SessionAuthentication',
     ]
 }
+
+try:
+    import rest_framework.schemas.coreapi
+    REST_FRAMEWORK['DEFAULT_SCHEMA_CLASS'] = 'rest_framework.schemas.coreapi.AutoSchema'
+except ImportError:
+    pass
+
+try:
+    from rest_framework.settings import api_settings
+    api_settings._cached_attrs.clear()
+except (ImportError, AttributeError):
+    pass

@@ -16,7 +16,7 @@ def filter_private_pin(request, query):
         query = query.exclude(~Q(submitter=request.user), private=True)
     else:
         query = query.exclude(private=True)
-    return query.select_related('image', 'submitter')
+    return query.select_related('image', 'submitter').distinct()
 
 
 def filter_private_board(request, query):
@@ -28,6 +28,8 @@ def filter_private_board(request, query):
 
 
 class ThumbnailSerializer(serializers.HyperlinkedModelSerializer):
+    url_field_name = settings.DRF_URL_FIELD_NAME
+    
     class Meta:
         model = Thumbnail
         fields = (
@@ -86,6 +88,8 @@ class TagSerializer(serializers.SlugRelatedField):
 
 
 class PinSerializer(serializers.HyperlinkedModelSerializer):
+    url_field_name = settings.DRF_URL_FIELD_NAME
+    
     class Meta:
         model = Pin
         fields = (
@@ -158,6 +162,8 @@ class PinIdListField(serializers.ListField):
 
 
 class BoardAutoCompleteSerializer(serializers.HyperlinkedModelSerializer):
+    url_field_name = settings.DRF_URL_FIELD_NAME
+    
     class Meta:
         model = Board
         fields = (
@@ -168,6 +174,8 @@ class BoardAutoCompleteSerializer(serializers.HyperlinkedModelSerializer):
 
 
 class BoardSerializer(serializers.HyperlinkedModelSerializer):
+    url_field_name = settings.DRF_URL_FIELD_NAME
+    
     class Meta:
         model = Board
         fields = (
@@ -213,10 +221,13 @@ class BoardSerializer(serializers.HyperlinkedModelSerializer):
         query = instance.pins.all()
         request = self.context['request']
         query = filter_private_pin(request, query)
-        return query.count()
+        return query.distinct().count()
 
     def get_cover(self, instance: Board) -> dict or None:
-        pin = instance.pins.first()
+        query = instance.pins.all()
+        request = self.context['request']
+        query = filter_private_pin(request, query)
+        pin = query.first()
         if pin is None:
             return None
         return PinSerializer(pin, context=self.context).data
