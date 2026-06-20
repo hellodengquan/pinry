@@ -1,15 +1,18 @@
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_page
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework import viewsets, mixins, routers
+from rest_framework import viewsets, mixins, routers, status
+from rest_framework.decorators import action
 from rest_framework.filters import SearchFilter, OrderingFilter
+from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 from taggit.models import Tag
 
 from core import serializers as api
 from core.models import Image, Pin, Board
-from core.permissions import IsOwnerOrReadOnly, OwnerOnlyIfPrivate
+from core.permissions import IsOwnerOrReadOnly, OwnerOnlyIfPrivate, SuperUserOnly
 from core.serializers import filter_private_pin, filter_private_board
+from core.utils import run_media_check, delete_orphan_files, fix_missing_files
 
 
 class ImageViewSet(mixins.CreateModelMixin, GenericViewSet):
@@ -77,9 +80,43 @@ class TagAutoCompleteViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         )
 
 
+class MediaCheckViewSet(viewsets.GenericViewSet):
+    permission_classes = [SuperUserOnly]
+    serializer_class = api.MediaCheckSerializer
+
+    @action(detail=False, methods=['get'])
+    def report(self, request):
+        result = run_media_check()
+        serializer = api.MediaCheckSerializer(result)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['post'])
+    def fix(self, request):
+        serializer = api.MediaCheckFixSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        action = serializer.validated_data['action']
+
+        results = {}
+
+        if action in ['delete_orphans', 'all']:
+            orphan_result = delete_orphan_files()
+            results['delete_orphans'] = api.DeleteOrphanResultSerializer(orphan_result).data
+
+        if action in ['fix_missing', 'all']:
+            missing_result = fix_missing_files()
+            results['fix_missing'] = api.FixMissingResultSerializer(missing_result).data
+
+        if action == 'all':
+            check_result = run_media_check()
+            results['report'] = api.MediaCheckSerializer(check_result).data
+
+        return Response(results, status=status.HTTP_200_OK)
+
+
 drf_router = routers.DefaultRouter()
 drf_router.register(r'pins', PinViewSet, basename="pin")
 drf_router.register(r'images', ImageViewSet)
 drf_router.register(r'boards', BoardViewSet, basename="board")
 drf_router.register(r'tags-auto-complete', TagAutoCompleteViewSet)
-drf_router.register(r'boards-auto-complete', BoardAutoCompleteViewSet, basename="board")
+drf_router.register(r'boards-auto-complete', BoardAutoCompleteViewSet, basename="board-auto-complete")
+drf_router.register(r'media-check', MediaCheckViewSet, basename="media-check")

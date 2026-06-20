@@ -273,3 +273,42 @@ class TagAutoCompleteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Tag
         fields = ('name', )
+
+
+class OrphanFileSerializer(serializers.Serializer):
+    path = serializers.CharField()
+    size = serializers.IntegerField()
+
+
+class PinWithoutImageSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    submitter = serializers.CharField()
+    description = serializers.CharField()
+
+
+class MediaCheckSerializer(serializers.Serializer):
+    media_root = serializers.CharField()
+    total_files = serializers.IntegerField()
+    total_db_files = serializers.IntegerField()
+    orphan_count = serializers.IntegerField()
+    missing_count = serializers.IntegerField()
+    orphan_files = OrphanFileSerializer(many=True)
+    missing_files = serializers.ListField(child=serializers.CharField())
+    pins_without_image = PinWithoutImageSerializer(many=True)
+
+
+class MediaCheckFixSerializer(serializers.Serializer):
+    action = serializers.ChoiceField(choices=['delete_orphans', 'fix_missing', 'all'])
+
+
+class DeleteOrphanResultSerializer(serializers.Serializer):
+    deleted_count = serializers.IntegerField()
+    deleted_files = serializers.ListField(child=serializers.CharField())
+    errors = serializers.ListField(child=serializers.DictField())
+
+
+class FixMissingResultSerializer(serializers.Serializer):
+    fixed_images = serializers.IntegerField()
+    fixed_thumbnails = serializers.IntegerField()
+    fixed_pins = serializers.IntegerField()
+    errors = serializers.ListField(child=serializers.DictField())
