@@ -468,6 +468,68 @@ class PreviewViewSet(viewsets.ViewSet):
             },
         }, status=status.HTTP_200_OK)
 
+    @action(detail=False, methods=['get'], url_path='versions')
+    def version_history(self, request):
+        from core.services.versioning import get_version_history
+
+        url = request.query_params.get("url")
+        if not url:
+            return Response(
+                {"url": "This query parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        referer = request.query_params.get("referer")
+        history = get_version_history(url, referer)
+        return Response({
+            "url": url,
+            "referer": referer,
+            "total_versions": len(history),
+            "history": history,
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['post'], url_path='versions/rollback')
+    def version_rollback(self, request):
+        from core.services.versioning import rollback_to_version
+
+        url = request.data.get("url")
+        version = request.data.get("version")
+        if not url or version is None:
+            return Response(
+                {"url": "url and version are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        referer = request.data.get("referer")
+        result = rollback_to_version(url, int(version), referer)
+        if result is None:
+            return Response(
+                {"error": f"Version {version} not found for {url}"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(result, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'], url_path='versions/diff')
+    def version_diff(self, request):
+        from core.services.versioning import diff_versions
+
+        url = request.query_params.get("url")
+        version_a = request.query_params.get("version_a")
+        version_b = request.query_params.get("version_b")
+        if not url or not version_a or not version_b:
+            return Response(
+                {"error": "url, version_a, version_b are required query params."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        referer = request.query_params.get("referer")
+        result = diff_versions(url, int(version_a), int(version_b), referer)
+        return Response(result, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'], url_path='metrics')
+    def metrics(self, request):
+        from core.services.metrics import get_metrics_summary
+
+        summary = get_metrics_summary()
+        return Response(summary, status=status.HTTP_200_OK)
+
 
 drf_router = routers.DefaultRouter()
 drf_router.register(r'pins', PinViewSet, basename="pin")

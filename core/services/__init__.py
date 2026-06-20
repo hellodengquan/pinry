@@ -13,6 +13,7 @@ from .preview_service import (
     CacheNamespaceManager,
     get_preview_manager,
     preview_error_to_legacy_message,
+    preview_error_to_i18n_message,
     bump_cache_namespace,
     get_cache_namespace_version,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "CacheNamespaceManager",
     "get_preview_manager",
     "preview_error_to_legacy_message",
+    "preview_error_to_i18n_message",
     "bump_cache_namespace",
     "get_cache_namespace_version",
 ]

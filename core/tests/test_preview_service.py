@@ -1288,3 +1288,313 @@ class PreviewWebhookTests(APITestCase):
                 )
                 self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
                 self.assertEqual(response.json()["code"], "missing_url")
+
+
+class I18nTests(TestCase):
+    def test_error_messages_dict_has_all_codes(self):
+        from core.services.i18n import PREVIEW_ERROR_MESSAGES
+        from core.services import PreviewErrorCode
+
+        for code in PreviewErrorCode:
+            self.assertIn(
+                code.value,
+                PREVIEW_ERROR_MESSAGES,
+                f"Missing i18n message for error code: {code.value}",
+            )
+
+    def test_get_error_message_returns_string(self):
+        from core.services.i18n import get_error_message
+
+        msg = get_error_message("invalid_content")
+        self.assertIsInstance(msg, str)
+        self.assertTrue(len(msg) > 0)
+
+    def test_get_error_message_unknown_code_fallback(self):
+        from core.services.i18n import get_error_message
+
+        msg = get_error_message("nonexistent_code_xyz")
+        self.assertEqual(msg, "nonexistent_code_xyz")
+
+    def test_preview_error_to_i18n_message(self):
+        from core.services import preview_error_to_i18n_message, PreviewError, PreviewErrorCode
+
+        error = PreviewError(
+            code=PreviewErrorCode.NETWORK_ERROR,
+            message="some internal msg",
+        )
+        i18n_msg = preview_error_to_i18n_message(error)
+        self.assertIsInstance(i18n_msg, str)
+        self.assertNotEqual(i18n_msg, error.message)
+
+    def test_admin_labels_dict_has_keys(self):
+        from core.services.i18n import ADMIN_LABELS, get_admin_label
+
+        self.assertIn("dashboard_title", ADMIN_LABELS)
+        label = get_admin_label("dashboard_title")
+        self.assertIsInstance(label, str)
+
+    def test_admin_label_with_kwargs(self):
+        from core.services.i18n import get_admin_label
+
+        label = get_admin_label("all_cache_invalidated", version=42)
+        self.assertIsInstance(label, str)
+        self.assertIn("42", label)
+
+    def test_webhook_messages_dict(self):
+        from core.services.i18n import WEBHOOK_MESSAGES, get_webhook_message
+
+        self.assertIn("invalid_signature", WEBHOOK_MESSAGES)
+        msg = get_webhook_message("invalid_signature")
+        self.assertIsInstance(msg, str)
+
+
+class VersioningTests(TestCase):
+    def test_save_and_get_version(self):
+        from django.core.cache import cache
+        from core.services.versioning import save_version, get_version_history
+
+        cache.clear()
+        url = "http://example.com/version-test.jpg"
+        result = {"content_type": "image", "image_id": 1}
+
+        v1 = save_version(url, result)
+        self.assertEqual(v1, 1)
+
+        result2 = {"content_type": "image", "image_id": 2}
+        v2 = save_version(url, result2)
+        self.assertEqual(v2, 2)
+
+        history = get_version_history(url)
+        self.assertEqual(len(history), 2)
+        self.assertEqual(history[0]["version"], 1)
+        self.assertEqual(history[1]["version"], 2)
+
+    def test_get_specific_version(self):
+        from django.core.cache import cache
+        from core.services.versioning import save_version, get_version
+
+        cache.clear()
+        url = "http://example.com/specific-version.jpg"
+        save_version(url, {"image_id": 10})
+        save_version(url, {"image_id": 20})
+        save_version(url, {"image_id": 30})
+
+        v2 = get_version(url, 2)
+        self.assertIsNotNone(v2)
+        self.assertEqual(v2["result"]["image_id"], 20)
+
+    def test_get_version_not_found(self):
+        from django.core.cache import cache
+        from core.services.versioning import get_version
+
+        cache.clear()
+        v = get_version("http://example.com/no-versions.jpg", 99)
+        self.assertIsNone(v)
+
+    def test_get_current_version_number(self):
+        from django.core.cache import cache
+        from core.services.versioning import save_version, get_current_version_number
+
+        cache.clear()
+        url = "http://example.com/current-ver.jpg"
+        save_version(url, {"image_id": 1})
+        save_version(url, {"image_id": 2})
+
+        current = get_current_version_number(url)
+        self.assertEqual(current, 2)
+
+    def test_rollback_to_version(self):
+        from django.core.cache import cache
+        from core.services.versioning import save_version, rollback_to_version
+
+        cache.clear()
+        url = "http://example.com/rollback-test.jpg"
+        save_version(url, {"content_type": "image", "image_id": 100})
+        save_version(url, {"content_type": "image", "image_id": 200})
+
+        result = rollback_to_version(url, 1)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["result"]["image_id"], 100)
+
+    def test_rollback_nonexistent_version(self):
+        from django.core.cache import cache
+        from core.services.versioning import rollback_to_version
+
+        cache.clear()
+        result = rollback_to_version("http://example.com/no-ver.jpg", 99)
+        self.assertIsNone(result)
+
+    def test_diff_versions(self):
+        from django.core.cache import cache
+        from core.services.versioning import save_version, diff_versions
+
+        cache.clear()
+        url = "http://example.com/diff-test.jpg"
+        save_version(url, {"content_type": "image", "image_id": 1, "title": "old"})
+        save_version(url, {"content_type": "image", "image_id": 2, "title": "new"})
+
+        diff = diff_versions(url, 1, 2)
+        self.assertIn("diff", diff)
+        self.assertIn("image_id", diff["diff"])
+        self.assertEqual(diff["diff"]["image_id"]["from"], 1)
+        self.assertEqual(diff["diff"]["image_id"]["to"], 2)
+
+    def test_diff_versions_one_missing(self):
+        from django.core.cache import cache
+        from core.services.versioning import diff_versions
+
+        cache.clear()
+        diff = diff_versions("http://example.com/no-ver.jpg", 1, 2)
+        self.assertIn("error", diff)
+
+    def test_clear_version_history(self):
+        from django.core.cache import cache
+        from core.services.versioning import save_version, get_version_history, clear_version_history
+
+        cache.clear()
+        url = "http://example.com/clear-test.jpg"
+        save_version(url, {"image_id": 1})
+        self.assertEqual(len(get_version_history(url)), 1)
+
+        clear_version_history(url)
+        self.assertEqual(len(get_version_history(url)), 0)
+
+    def test_max_history_limit(self):
+        from django.core.cache import cache
+        from django.conf import settings as django_settings
+        from core.services.versioning import save_version, get_version_history
+        from django.test import override_settings
+
+        cache.clear()
+        url = "http://example.com/max-hist.jpg"
+
+        with override_settings(PREVIEW_MAX_HISTORY=3):
+            from core.services import versioning
+            versioning._MAX_HISTORY_PER_URL = 3
+            for i in range(5):
+                save_version(url, {"image_id": i})
+            history = get_version_history(url)
+            self.assertLessEqual(len(history), 5)
+            versioning._MAX_HISTORY_PER_URL = getattr(
+                django_settings, "PREVIEW_MAX_HISTORY", 10
+            )
+
+
+class MetricsTests(TestCase):
+    def setUp(self):
+        from core.services.metrics import get_metrics_collector
+        collector = get_metrics_collector()
+        collector.reset()
+
+    def test_record_and_get_metrics(self):
+        from core.services.metrics import record_preview_metric, get_metrics_summary
+
+        record_preview_metric("preview", 0.1, content_type="image", success=True)
+        record_preview_metric("preview", 0.2, content_type="image", success=True)
+        record_preview_metric("preview", 0.05, content_type="image", from_cache=True)
+
+        summary = get_metrics_summary()
+        self.assertIn("operations", summary)
+        self.assertIn("preview", summary["operations"])
+
+        preview_metrics = summary["operations"]["preview"]
+        self.assertEqual(preview_metrics["count"], 3)
+        self.assertIn("latency", preview_metrics)
+        self.assertIn("min", preview_metrics["latency"])
+        self.assertIn("max", preview_metrics["latency"])
+        self.assertIn("mean", preview_metrics["latency"])
+
+    def test_cache_hit_rate(self):
+        from core.services.metrics import record_preview_metric, get_metrics_collector
+
+        collector = get_metrics_collector()
+        record_preview_metric("preview", 0.1, from_cache=True)
+        record_preview_metric("preview", 0.1, from_cache=True)
+        record_preview_metric("preview", 0.2, from_cache=False)
+
+        metrics = collector.get_operation_metrics("preview")
+        self.assertAlmostEqual(metrics["cache_hit_rate"], 2 / 3, places=2)
+
+    def test_error_rate(self):
+        from core.services.metrics import record_preview_metric, get_metrics_collector
+
+        collector = get_metrics_collector()
+        record_preview_metric("preview", 0.1, success=True)
+        record_preview_metric("preview", 0.1, success=False, error_code="timeout")
+
+        metrics = collector.get_operation_metrics("preview")
+        self.assertEqual(metrics["error_rate"], 0.5)
+        self.assertIn("timeout", metrics["error_breakdown"])
+
+    def test_empty_metrics(self):
+        from core.services.metrics import get_metrics_collector
+
+        collector = get_metrics_collector()
+        metrics = collector.get_operation_metrics("nonexistent")
+        self.assertEqual(metrics["count"], 0)
+        self.assertIsNone(metrics["latency"])
+
+    def test_metric_timer_context_manager(self):
+        from core.services.metrics import PreviewMetricTimer, get_metrics_collector
+        import time
+
+        collector = get_metrics_collector()
+
+        with PreviewMetricTimer(operation="test_op", content_type="image") as t:
+            time.sleep(0.01)
+
+        metrics = collector.get_operation_metrics("test_op")
+        self.assertEqual(metrics["count"], 1)
+        self.assertGreater(metrics["latency"]["min"], 0)
+
+    def test_metric_timer_with_exception(self):
+        from core.services.metrics import PreviewMetricTimer, get_metrics_collector
+        from core.services import PreviewError, PreviewErrorCode
+
+        collector = get_metrics_collector()
+
+        try:
+            with PreviewMetricTimer(operation="test_error") as t:
+                raise PreviewError(
+                    code=PreviewErrorCode.TIMEOUT,
+                    message="timeout",
+                )
+        except PreviewError:
+            pass
+
+        metrics = collector.get_operation_metrics("test_error")
+        self.assertEqual(metrics["count"], 1)
+        self.assertAlmostEqual(metrics["error_rate"], 1.0)
+
+    def test_metrics_endpoint(self):
+        url = reverse("preview-metrics")
+        response = self.client.get(url, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertIn("operations", data)
+        self.assertIn("uptime_seconds", data)
+
+    def test_version_history_endpoint(self):
+        url = reverse("preview-version-history")
+        response = self.client.get(url, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        response = self.client.get(
+            url + "?url=http://example.com/test.jpg", format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertIn("history", data)
+        self.assertIn("total_versions", data)
+
+    def test_version_rollback_endpoint_no_data(self):
+        url = reverse("preview-version-rollback")
+        response = self.client.post(
+            url, data={"url": "http://example.com/x.jpg", "version": 1}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_version_diff_endpoint_no_params(self):
+        url = reverse("preview-version-diff")
+        response = self.client.get(url, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)

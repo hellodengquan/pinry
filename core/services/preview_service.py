@@ -146,6 +146,11 @@ def preview_error_to_legacy_message(error: PreviewError) -> str:
     return _ERROR_CODE_TO_LEGACY_MESSAGE.get(error.code, error.message)
 
 
+def preview_error_to_i18n_message(error: PreviewError, language: str = None) -> str:
+    from core.services.i18n import get_error_message
+    return get_error_message(error.code.value, language=language)
+
+
 @dataclass
 class PreviewRequest:
     url: str
@@ -511,11 +516,18 @@ class PreviewServiceManager:
                 return None
         return None
 
-    def _set_cache(self, key: str, result: PreviewResult, timeout: Optional[int] = None) -> None:
+    def _set_cache(self, key: str, result: PreviewResult, timeout: Optional[int] = None, url: str = "", referer: Optional[str] = None) -> None:
         cache_timeout = timeout or getattr(
             settings, "PREVIEW_CACHE_TIMEOUT", self._cache_timeout_default
         )
-        cache.set(key, result.to_dict(), cache_timeout)
+        result_dict = result.to_dict()
+        cache.set(key, result_dict, cache_timeout)
+        if url:
+            try:
+                from core.services.versioning import save_version
+                save_version(url, result_dict, referer=referer)
+            except Exception:
+                logger.exception("Failed to save version history for %s", url)
 
     def invalidate_cache(self, request: PreviewRequest) -> bool:
         key = request.cache_key()
@@ -567,24 +579,39 @@ class PreviewServiceManager:
         request: PreviewRequest,
         use_cache: bool = True,
     ) -> PreviewResult:
-        if use_cache and not request.force_refresh:
-            cached = self._get_cache(request.cache_key())
-            if cached is not None:
-                return cached
+        from core.services.metrics import PreviewMetricTimer
 
-        service = self.get_service_for_request(request)
-        if service is None:
-            raise PreviewError(
-                code=PreviewErrorCode.FORMAT_UNSUPPORTED,
-                message="unsupported content type",
-                field="url",
-                details={"url": request.url},
-            )
+        ct_value = request.content_type_hint.value if request.content_type_hint else None
+        timer = PreviewMetricTimer(
+            operation="preview",
+            content_type=ct_value,
+            url=request.url,
+        )
 
-        result = service.fetch(request)
-        if use_cache:
-            self._set_cache(request.cache_key(), result)
-        return result
+        with timer:
+            if use_cache and not request.force_refresh:
+                cached = self._get_cache(request.cache_key())
+                if cached is not None:
+                    timer.set_from_cache(True)
+                    return cached
+
+            service = self.get_service_for_request(request)
+            if service is None:
+                raise PreviewError(
+                    code=PreviewErrorCode.FORMAT_UNSUPPORTED,
+                    message="unsupported content type",
+                    field="url",
+                    details={"url": request.url},
+                )
+
+            result = service.fetch(request)
+            if use_cache:
+                self._set_cache(
+                    request.cache_key(), result,
+                    url=request.url, referer=request.referer,
+                )
+            timer.set_from_cache(result.from_cache)
+            return result
 
     def refresh(
         self,
