@@ -10,34 +10,34 @@ class PublicUserSerializer(serializers.HyperlinkedModelSerializer):
     class Meta:
         model = User
         fields = (
+            'resource_link',
             'username',
             'gravatar',
-            settings.DRF_URL_FIELD_NAME,
         )
-        extra_kwargs = {
-            settings.DRF_URL_FIELD_NAME: {
-                "view_name": "public-users:user-detail",
-            },
-        }
+
+    resource_link = serializers.HyperlinkedIdentityField(
+        view_name="public-users:user-detail",
+        read_only=True,
+    )
 
 
 class UserSerializer(serializers.HyperlinkedModelSerializer):
     class Meta:
         model = User
         fields = (
+            'resource_link',
             'username',
             'token',
             'email',
             'gravatar',
             'password',
             'password_repeat',
-            settings.DRF_URL_FIELD_NAME,
         )
-        extra_kwargs = {
-            settings.DRF_URL_FIELD_NAME: {
-                "view_name": "users:user-detail",
-            },
-        }
+
+    resource_link = serializers.HyperlinkedIdentityField(
+        view_name="users:user-detail",
+        read_only=True,
+    )
 
     password = serializers.CharField(
         write_only=True,

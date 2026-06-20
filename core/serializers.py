@@ -6,6 +6,12 @@ from taggit.models import Tag
 
 from core.models import Image, Board
 from core.models import Pin
+from core.services import (
+    PreviewError,
+    PreviewContentType,
+    get_preview_manager,
+    preview_error_to_legacy_message,
+)
 from django_images.models import Thumbnail
 from users.serializers import UserSerializer
 from users.models import User
@@ -89,7 +95,7 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
     class Meta:
         model = Pin
         fields = (
-            settings.DRF_URL_FIELD_NAME,
+            "resource_link",
             "private",
             "id",
             "submitter",
@@ -101,6 +107,10 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
             "tags",
         )
 
+    resource_link = serializers.HyperlinkedIdentityField(
+        view_name="pin-detail",
+        read_only=True,
+    )
     submitter = UserSerializer(read_only=True)
     tags = TagSerializer(
         many=True,
@@ -126,12 +136,33 @@ class PinSerializer(serializers.HyperlinkedModelSerializer):
         submitter = self.context['request'].user
         if 'url' in validated_data and validated_data['url']:
             url = validated_data['url']
-            image = Image.objects.create_for_url(
-                url,
-                validated_data.get('referer', url),
-            )
-            if not image:
-                raise ValidationError({"url": "invalid image content"})
+            referer = validated_data.get('referer', url)
+            try:
+                preview_manager = get_preview_manager()
+                result = preview_manager.preview(
+                    url=url,
+                    referer=referer,
+                    content_type_hint=PreviewContentType.IMAGE,
+                )
+                if result.image_id is None:
+                    preview_manager.invalidate_cache_for_url(url, referer)
+                    raise ValidationError({"url": "invalid image content"})
+                try:
+                    image = Image.objects.get(pk=result.image_id)
+                except Image.DoesNotExist:
+                    preview_manager.invalidate_cache_for_url(url, referer)
+                    result = preview_manager.preview(
+                        url=url,
+                        referer=referer,
+                        content_type_hint=PreviewContentType.IMAGE,
+                        force_refresh=True,
+                    )
+                    if result.image_id is None:
+                        raise ValidationError({"url": "invalid image content"})
+                    image = Image.objects.get(pk=result.image_id)
+            except PreviewError as e:
+                legacy_message = preview_error_to_legacy_message(e)
+                raise ValidationError({e.field or "url": legacy_message})
         else:
             image = validated_data.pop("image_by_id")
         tags = validated_data.pop('tag_list', [])
@@ -161,17 +192,22 @@ class BoardAutoCompleteSerializer(serializers.HyperlinkedModelSerializer):
     class Meta:
         model = Board
         fields = (
-            settings.DRF_URL_FIELD_NAME,
+            'resource_link',
             'id',
             'name',
         )
+
+    resource_link = serializers.HyperlinkedIdentityField(
+        view_name="board-auto-complete-detail",
+        read_only=True,
+    )
 
 
 class BoardSerializer(serializers.HyperlinkedModelSerializer):
     class Meta:
         model = Board
         fields = (
-            settings.DRF_URL_FIELD_NAME,
+            "resource_link",
             "id",
             "name",
             "private",
@@ -186,6 +222,11 @@ class BoardSerializer(serializers.HyperlinkedModelSerializer):
         extra_kwargs = {
             'submitter': {"view_name": "users:user-detail"},
         }
+
+    resource_link = serializers.HyperlinkedIdentityField(
+        view_name="board-detail",
+        read_only=True,
+    )
 
     submitter = UserSerializer(read_only=True)
     total_pins = serializers.SerializerMethodField(

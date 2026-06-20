@@ -1,4 +1,8 @@
-from django.conf.urls import url, include
+try:
+    from django.urls import re_path as url
+except ImportError:
+    from django.conf.urls import url
+from django.urls import include
 
 from users.views import login_user
 from . import views
