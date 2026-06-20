@@ -79,5 +79,18 @@
   "imageSourceLabel": "图片来源",
   "tagsLabel": "标签",
   "descriptionLabel": "描述",
-  "selectBoardLabel": "选择画板"
+  "selectBoardLabel": "选择画板",
+  "collaboratorsLabel": "协作者",
+  "permissionView": "查看",
+  "permissionEdit": "编辑",
+  "permissionManage": "管理",
+  "collaboratorUsernamePlaceholder": "输入用户名邀请",
+  "addCollaboratorButton": "添加",
+  "userNotFound": "未找到该用户",
+  "collaboratorAdded": "协作者已添加",
+  "collaboratorAddFailed": "添加协作者失败",
+  "permissionUpdated": "权限已更新",
+  "permissionUpdateFailed": "权限更新失败",
+  "collaboratorRemoved": "协作者已移除",
+  "collaboratorRemoveFailed": "移除协作者失败"
 }

@@ -41,6 +41,17 @@
                         {{ $t("pinsInBoard") }}<span class="num-pins">{{ item.total_pins }}</span>
                       </small>
                     </p>
+                    <p class="description collaborator-info" v-if="item.collaborators && item.collaborators.length > 0">
+                      <small>
+                        {{ $t("collaboratorsLabel") }}
+                        <span
+                          v-for="(collab, idx) in item.collaborators"
+                          :key="collab.id"
+                        >
+                          {{ collab.username }}({{ $t(permissionLabel(collab.permission)) }})<template v-if="idx < item.collaborators.length - 1">, </template>
+                        </span>
+                      </small>
+                    </p>
                   </div>
                 </div>
               </div>
@@ -90,6 +101,7 @@ function createBoardItem(board) {
   };
   boardItem.class = {};
   boardItem.author = board.submitter.username;
+  boardItem.collaborators = board.collaborators || [];
   return boardItem;
 }
 
@@ -124,6 +136,14 @@ export default {
     },
   },
   methods: {
+    permissionLabel(permission) {
+      const map = {
+        view: 'permissionView',
+        edit: 'permissionEdit',
+        manage: 'permissionManage',
+      };
+      return map[permission] || 'permissionView';
+    },
     initialize() {
       this.initializeMeta();
       this.fetchMore(true);
@@ -294,6 +314,10 @@ $avatar-height: 30px;
   .num-pins {
     font-size: 0.8rem;
     color: $main-title-font-color;
+  }
+  .collaborator-info {
+    font-size: 0.75rem;
+    color: #888;
   }
 }
 

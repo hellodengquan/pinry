@@ -1,11 +1,18 @@
 from rest_framework import permissions
 
+from core.models import BoardCollaborator
+
+
+def get_collaborator_permission(user, board):
+    if user == board.submitter:
+        return BoardCollaborator.PermissionLevel.MANAGE
+    collab = BoardCollaborator.objects.filter(board=board, user=user).first()
+    if collab:
+        return collab.permission
+    return None
+
 
 class IsOwnerOrReadOnly(permissions.IsAuthenticatedOrReadOnly):
-    """
-    Object-level permission to only allow owners of an object to edit it.
-    Assumes the model instance has an `owner` attribute.
-    """
     def __init__(self, owner_field_name="owner"):
         self.__owner_field_name = owner_field_name
 
@@ -13,12 +20,20 @@ class IsOwnerOrReadOnly(permissions.IsAuthenticatedOrReadOnly):
         return self
 
     def has_object_permission(self, request, view, obj):
-        # Read permissions are allowed to any request,
-        # so we'll always allow GET, HEAD or OPTIONS requests.
         if request.method in permissions.SAFE_METHODS:
             return True
 
-        return getattr(obj, self.__owner_field_name) == request.user
+        if getattr(obj, self.__owner_field_name) == request.user:
+            return True
+
+        if hasattr(obj, 'collaborators'):
+            perm = get_collaborator_permission(request.user, obj)
+            if perm == BoardCollaborator.PermissionLevel.EDIT:
+                return request.method in ('PATCH', 'PUT', 'POST')
+            if perm == BoardCollaborator.PermissionLevel.MANAGE:
+                return True
+
+        return False
 
 
 class OwnerOnlyIfPrivate(permissions.BasePermission):
@@ -29,9 +44,14 @@ class OwnerOnlyIfPrivate(permissions.BasePermission):
         return self
 
     def has_object_permission(self, request, view, obj):
-        if getattr(obj, "private"):
-            return request.user == getattr(obj, self.__owner_field_name)
-        return True
+        if not getattr(obj, "private"):
+            return True
+        if request.user == getattr(obj, self.__owner_field_name):
+            return True
+        if hasattr(obj, 'collaborators'):
+            perm = get_collaborator_permission(request.user, obj)
+            return perm is not None
+        return False
 
 
 class OwnerOnly(permissions.IsAuthenticatedOrReadOnly):
@@ -44,9 +64,6 @@ class OwnerOnly(permissions.IsAuthenticatedOrReadOnly):
 
 
 class SuperUserOnly(permissions.BasePermission):
-    """
-    The request is authenticated as a user, or is a read-only request.
-    """
 
     def has_permission(self, request, view):
         return request.user.is_superuser

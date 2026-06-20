@@ -79,5 +79,18 @@
     "imageSourceLabel": "Source de l'image",
     "tagsLabel": "Tags",
     "descriptionLabel": "Description",
-    "selectBoardLabel": "Selectionner un tableau"
+    "selectBoardLabel": "Selectionner un tableau",
+    "collaboratorsLabel": "Collaborateurs",
+    "permissionView": "Voir",
+    "permissionEdit": "Éditer",
+    "permissionManage": "Gérer",
+    "collaboratorUsernamePlaceholder": "Entrez le nom d'utilisateur à inviter",
+    "addCollaboratorButton": "Ajouter",
+    "userNotFound": "Utilisateur non trouvé",
+    "collaboratorAdded": "Collaborateur ajouté",
+    "collaboratorAddFailed": "Échec de l'ajout du collaborateur",
+    "permissionUpdated": "Permission mise à jour",
+    "permissionUpdateFailed": "Échec de la mise à jour de la permission",
+    "collaboratorRemoved": "Collaborateur supprimé",
+    "collaboratorRemoveFailed": "Échec de la suppression du collaborateur"
 }

@@ -67,6 +67,25 @@ const Board = {
   },
 };
 
+const Collaborator = {
+  list(boardId) {
+    const url = `${API_PREFIX}boards/${boardId}/collaborators/`;
+    return axios.get(url);
+  },
+  add(boardId, userId, permission = 'view') {
+    const url = `${API_PREFIX}boards/${boardId}/collaborators/`;
+    return axios.post(url, { user: userId, permission });
+  },
+  update(boardId, collaboratorId, permission) {
+    const url = `${API_PREFIX}boards/${boardId}/collaborators/${collaboratorId}/`;
+    return axios.patch(url, { permission });
+  },
+  remove(boardId, collaboratorId) {
+    const url = `${API_PREFIX}boards/${boardId}/collaborators/${collaboratorId}/`;
+    return axios.delete(url);
+  },
+};
+
 const Pin = {
   create(jsonData) {
     const url = `${API_PREFIX}pins/`;
@@ -283,6 +302,7 @@ export default {
   Tag,
   Pin,
   Board,
+  Collaborator,
   fetchPin,
   fetchPins,
   fetchBoardForUser,

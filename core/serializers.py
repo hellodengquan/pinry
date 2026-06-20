@@ -4,7 +4,7 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from taggit.models import Tag
 
-from core.models import Image, Board
+from core.models import Image, Board, BoardCollaborator
 from core.models import Pin
 from django_images.models import Thumbnail
 from users.serializers import UserSerializer
@@ -21,7 +21,14 @@ def filter_private_pin(request, query):
 
 def filter_private_board(request, query):
     if request.user.is_authenticated:
-        query = query.exclude(~Q(submitter=request.user), private=True)
+        from core.models import BoardCollaborator
+        collab_board_ids = BoardCollaborator.objects.filter(
+            user=request.user
+        ).values_list('board_id', flat=True)
+        query = query.exclude(
+            ~Q(submitter=request.user) & ~Q(id__in=collab_board_ids),
+            private=True,
+        )
     else:
         query = query.exclude(private=True)
     return query
@@ -167,6 +174,39 @@ class BoardAutoCompleteSerializer(serializers.HyperlinkedModelSerializer):
         )
 
 
+class BoardCollaboratorSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BoardCollaborator
+        fields = (
+            "id",
+            "user",
+            "permission",
+            "username",
+        )
+        read_only_fields = ("id", "username")
+
+    user = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.all(),
+        write_only=True,
+    )
+    username = serializers.SerializerMethodField(read_only=True)
+    permission = serializers.ChoiceField(
+        choices=BoardCollaborator.PermissionLevel.choices,
+        default=BoardCollaborator.PermissionLevel.VIEW,
+    )
+
+    def get_username(self, obj):
+        return obj.user.username
+
+    def validate_user(self, value):
+        board = self.context.get('board')
+        if board and value == board.submitter:
+            raise ValidationError("Board owner cannot be added as collaborator.")
+        if board and BoardCollaborator.objects.filter(board=board, user=value).exists():
+            raise ValidationError("This user is already a collaborator.")
+        return value
+
+
 class BoardSerializer(serializers.HyperlinkedModelSerializer):
     class Meta:
         model = Board
@@ -181,6 +221,7 @@ class BoardSerializer(serializers.HyperlinkedModelSerializer):
             "submitter",
             "pins_to_add",
             "pins_to_remove",
+            "collaborators",
         )
         read_only_fields = ('submitter', 'published')
         extra_kwargs = {
@@ -192,6 +233,10 @@ class BoardSerializer(serializers.HyperlinkedModelSerializer):
         read_only=True,
     )
     cover = serializers.SerializerMethodField(
+        read_only=True,
+    )
+    collaborators = BoardCollaboratorSerializer(
+        many=True,
         read_only=True,
     )
     pins_to_add = PinIdListField(

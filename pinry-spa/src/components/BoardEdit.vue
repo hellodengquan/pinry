@@ -45,6 +45,55 @@
                     {{ $t("isPrivateCheckbox") }}
                 </b-checkbox>
               </b-field>
+            <b-field :label="$t('collaboratorsLabel')">
+              <div class="collaborators-section">
+                <div
+                  v-for="collab in collaborators"
+                  :key="collab.id"
+                  class="collaborator-item"
+                >
+                  <span class="collaborator-username">{{ collab.username }}</span>
+                  <b-select
+                    :value="collab.permission"
+                    size="is-small"
+                    @input="(val) => updatePermission(collab, val)"
+                    class="collaborator-permission-select"
+                  >
+                    <option value="view">{{ $t('permissionView') }}</option>
+                    <option value="edit">{{ $t('permissionEdit') }}</option>
+                    <option value="manage">{{ $t('permissionManage') }}</option>
+                  </b-select>
+                  <button
+                    class="delete is-small"
+                    @click="removeCollaborator(collab)"
+                  ></button>
+                </div>
+                <div class="add-collaborator">
+                  <b-input
+                    v-model="newCollaboratorUsername"
+                    :placeholder="$t('collaboratorUsernamePlaceholder')"
+                    size="is-small"
+                    class="add-collaborator-input"
+                  ></b-input>
+                  <b-select
+                    v-model="newCollaboratorPermission"
+                    size="is-small"
+                    class="add-collaborator-permission"
+                  >
+                    <option value="view">{{ $t('permissionView') }}</option>
+                    <option value="edit">{{ $t('permissionEdit') }}</option>
+                    <option value="manage">{{ $t('permissionManage') }}</option>
+                  </b-select>
+                  <button
+                    class="button is-small is-primary"
+                    @click="addCollaborator"
+                    :disabled="!newCollaboratorUsername"
+                  >
+                    {{ $t('addCollaboratorButton') }}
+                  </button>
+                </div>
+              </div>
+            </b-field>
           </div>
         </section>
         <footer class="modal-card-foot">
@@ -83,6 +132,9 @@ export default {
       },
       createModel,
       editModel,
+      collaborators: [],
+      newCollaboratorUsername: '',
+      newCollaboratorPermission: 'view',
     };
   },
   props: {
@@ -101,11 +153,86 @@ export default {
     if (this.isEdit) {
       this.UIMeta.title = 'BoardEditTitle';
       this.editModel.assignToForm(this.board);
+      this.loadCollaborators();
     } else {
       this.createModel.form.private.value = false;
     }
   },
   methods: {
+    loadCollaborators() {
+      if (!this.board || !this.board.id) return;
+      API.Collaborator.list(this.board.id).then(
+        (resp) => {
+          this.collaborators = resp.data;
+        },
+      );
+    },
+    addCollaborator() {
+      if (!this.newCollaboratorUsername) return;
+      API.User.fetchUserInfoByName(this.newCollaboratorUsername).then(
+        (user) => {
+          if (!user) {
+            this.$buefy.toast.open({
+              type: 'is-danger',
+              message: this.$t('userNotFound'),
+            });
+            return;
+          }
+          API.Collaborator.add(
+            this.board.id,
+            user.id,
+            this.newCollaboratorPermission,
+          ).then(
+            () => {
+              this.newCollaboratorUsername = '';
+              this.newCollaboratorPermission = 'view';
+              this.loadCollaborators();
+              this.$buefy.toast.open(this.$t('collaboratorAdded'));
+            },
+            (error) => {
+              const msg = error.data && error.data.user
+                ? error.data.user.join(', ')
+                : this.$t('collaboratorAddFailed');
+              this.$buefy.toast.open({ type: 'is-danger', message: msg });
+            },
+          );
+        },
+      );
+    },
+    updatePermission(collab, newPermission) {
+      API.Collaborator.update(
+        this.board.id,
+        collab.id,
+        newPermission,
+      ).then(
+        () => {
+          collab.permission = newPermission;
+          this.$buefy.toast.open(this.$t('permissionUpdated'));
+        },
+        () => {
+          this.$buefy.toast.open({
+            type: 'is-danger',
+            message: this.$t('permissionUpdateFailed'),
+          });
+        },
+      );
+    },
+    removeCollaborator(collab) {
+      API.Collaborator.remove(this.board.id, collab.id).then(
+        () => {
+          this.collaborators = this.collaborators.filter(
+            (c) => c.id !== collab.id,
+          );
+          this.$buefy.toast.open(this.$t('collaboratorRemoved'));
+        },
+        () => {
+          this.$buefy.toast.open({
+            type: 'is-danger',
+            message: this.$t('collaboratorRemoveFailed'),
+          });
+        },
+      );
+    },
     saveBoardChanges() {
       const self = this;
       const promise = API.Board.saveChanges(
@@ -142,3 +269,34 @@ export default {
   },
 };
 </script>
+
+<style scoped>
+.collaborators-section {
+  width: 100%;
+}
+.collaborator-item {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+  gap: 8px;
+}
+.collaborator-username {
+  flex: 1;
+  font-size: 0.9rem;
+}
+.collaborator-permission-select {
+  min-width: 100px;
+}
+.add-collaborator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.add-collaborator-input {
+  flex: 1;
+}
+.add-collaborator-permission {
+  min-width: 100px;
+}
+</style>

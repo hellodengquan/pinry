@@ -97,6 +97,24 @@ class Board(models.Model):
     published = models.DateTimeField(auto_now_add=True)
 
 
+class BoardCollaborator(models.Model):
+    class PermissionLevel(models.TextChoices):
+        VIEW = 'view', 'View'
+        EDIT = 'edit', 'Edit'
+        MANAGE = 'manage', 'Manage'
+
+    class Meta:
+        unique_together = ("board", "user")
+
+    board = models.ForeignKey(Board, on_delete=models.CASCADE, related_name="collaborators")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="board_collaborations")
+    permission = models.CharField(
+        max_length=10,
+        choices=PermissionLevel.choices,
+        default=PermissionLevel.VIEW,
+    )
+
+
 class Pin(models.Model):
     submitter = models.ForeignKey(User, on_delete=models.CASCADE)
     private = models.BooleanField(default=False, blank=False)
