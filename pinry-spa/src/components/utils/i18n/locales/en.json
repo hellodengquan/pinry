@@ -79,5 +79,8 @@
     "imageSourceLabel": "Image Source",
     "tagsLabel": "Tags",
     "descriptionLabel": "Descripton",
-    "selectBoardLabel": "Select Board"
+    "selectBoardLabel": "Select Board",
+    "tagMergeNotificationTitle": "Tag merged",
+    "tagMergeNotificationText": "Tag '{oldTag}' has been merged into '{newTag}', reloading search results...",
+    "tagMergeReloading": "Reloading search results for new tag..."
 }

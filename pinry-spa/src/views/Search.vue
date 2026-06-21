@@ -3,7 +3,7 @@
     <PHeader></PHeader>
     <SearchPanel v-on:selected="doSearch"></SearchPanel>
     <div v-if="showMergeNotice" class="merge-notification">
-      <span>{{ mergeNoticeText }}</span>
+      <span>{{ $t('tagMergeNotificationText', { oldTag: mergeOldTag, newTag: mergeNewTag }) }}</span>
     </div>
     <Pins
       v-if="pinFilters"
@@ -30,7 +30,8 @@ export default {
       pinsKey: 0,
       fullRefreshRequired: false,
       showMergeNotice: false,
-      mergeNoticeText: '',
+      mergeOldTag: '',
+      mergeNewTag: '',
     };
   },
   components: {
@@ -51,7 +52,8 @@ export default {
       if (isMergeSwitch) {
         this.fullRefreshRequired = true;
         this.showMergeNotice = true;
-        this.mergeNoticeText = `标签「${mergedFrom}」已合并为「${args.selected}」，正在重新加载搜索结果...`;
+        this.mergeOldTag = mergedFrom;
+        this.mergeNewTag = args.selected;
         setTimeout(() => {
           this.showMergeNotice = false;
         }, 3000);

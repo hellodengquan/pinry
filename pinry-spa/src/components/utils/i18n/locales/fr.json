@@ -79,5 +79,8 @@
     "imageSourceLabel": "Source de l'image",
     "tagsLabel": "Tags",
     "descriptionLabel": "Description",
-    "selectBoardLabel": "Selectionner un tableau"
+    "selectBoardLabel": "Selectionner un tableau",
+    "tagMergeNotificationTitle": "Tag fusionné",
+    "tagMergeNotificationText": "Le tag « {oldTag} » a été fusionné en « {newTag} », rechargement des résultats de recherche en cours...",
+    "tagMergeReloading": "Rechargement des résultats de recherche pour le nouveau tag..."
 }

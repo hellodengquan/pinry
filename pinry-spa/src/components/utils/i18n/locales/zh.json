@@ -79,5 +79,8 @@
   "imageSourceLabel": "图片来源",
   "tagsLabel": "标签",
   "descriptionLabel": "描述",
-  "selectBoardLabel": "选择画板"
+  "selectBoardLabel": "选择画板",
+  "tagMergeNotificationTitle": "标签已合并",
+  "tagMergeNotificationText": "标签「{oldTag}」已合并为「{newTag}」，正在重新加载搜索结果...",
+  "tagMergeReloading": "正在为新标签重新加载搜索结果..."
 }

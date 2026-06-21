@@ -128,9 +128,15 @@ def delete_pin_images(sender, instance, **kwargs):
 
 @receiver(models.signals.post_save, sender=Tag)
 def invalidate_tags_cache_on_save(sender, instance, **kwargs):
-    cache.delete_pattern(f'*{TAGS_CACHE_KEY_PREFIX}*')
+    from django.db import transaction
+    transaction.on_commit(
+        lambda: cache.delete_pattern(f'*{TAGS_CACHE_KEY_PREFIX}*')
+    )
 
 
 @receiver(models.signals.post_delete, sender=Tag)
 def invalidate_tags_cache_on_delete(sender, instance, **kwargs):
-    cache.delete_pattern(f'*{TAGS_CACHE_KEY_PREFIX}*')
+    from django.db import transaction
+    transaction.on_commit(
+        lambda: cache.delete_pattern(f'*{TAGS_CACHE_KEY_PREFIX}*')
+    )

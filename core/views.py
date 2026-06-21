@@ -23,6 +23,10 @@ def _invalidate_tags_cache():
     cache.delete_pattern(f'*{TAGS_CACHE_KEY_PREFIX}*')
 
 
+def _invalidate_tags_cache_on_commit():
+    transaction.on_commit(_invalidate_tags_cache)
+
+
 class ImageViewSet(mixins.CreateModelMixin, GenericViewSet):
     queryset = Image.objects.all()
     serializer_class = api.ImageSerializer
@@ -92,18 +96,21 @@ class TagViewSet(
         return super(TagViewSet, self).list(request, *args, **kwargs)
 
     def create(self, request, *args, **kwargs):
-        response = super(TagViewSet, self).create(request, *args, **kwargs)
-        _invalidate_tags_cache()
+        with transaction.atomic():
+            response = super(TagViewSet, self).create(request, *args, **kwargs)
+            _invalidate_tags_cache_on_commit()
         return response
 
     def update(self, request, *args, **kwargs):
-        response = super(TagViewSet, self).update(request, *args, **kwargs)
-        _invalidate_tags_cache()
+        with transaction.atomic():
+            response = super(TagViewSet, self).update(request, *args, **kwargs)
+            _invalidate_tags_cache_on_commit()
         return response
 
     def destroy(self, request, *args, **kwargs):
-        response = super(TagViewSet, self).destroy(request, *args, **kwargs)
-        _invalidate_tags_cache()
+        with transaction.atomic():
+            response = super(TagViewSet, self).destroy(request, *args, **kwargs)
+            _invalidate_tags_cache_on_commit()
         return response
 
     @action(detail=False, methods=['post'], url_path='merge')
@@ -138,7 +145,7 @@ class TagViewSet(
                 source_tag.name = target_tag_name
                 source_tag.slug = target_tag_name
                 source_tag.save()
-                _invalidate_tags_cache()
+                _invalidate_tags_cache_on_commit()
                 return Response(
                     {
                         'success': True,
@@ -165,7 +172,7 @@ class TagViewSet(
                     tagged_item.delete()
 
             source_tag.delete()
-            _invalidate_tags_cache()
+            _invalidate_tags_cache_on_commit()
 
         return Response(
             {
