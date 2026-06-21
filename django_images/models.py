@@ -24,6 +24,66 @@ def calculate_md5(file_obj):
     return hasher.hexdigest()
 
 
+PHASH_THRESHOLD_SAMPLES = [
+    {
+        "threshold": 0,
+        "name": "完全相同",
+        "hit_samples": ["PNG→JPG 仅转格式", "文件重命名", "仅修改 EXIF 拍摄时间"],
+        "miss_samples": ["任何图像内容修改"],
+        "false_positive_rate": "≈ 0%",
+        "recommended_scenario": "法律取证、版权严格去重",
+    },
+    {
+        "threshold": 2,
+        "name": "极相似",
+        "hit_samples": ["质量 95→50 的 JPG 压缩", "去除隐形水印", "色彩空间 sRGB→AdobeRGB"],
+        "miss_samples": ["添加可见水印、±10% 以上亮度调整"],
+        "false_positive_rate": "< 0.01%",
+        "recommended_scenario": "素材库、严格设计稿版本管理",
+    },
+    {
+        "threshold": 5,
+        "name": "相似（推荐默认）",
+        "hit_samples": [
+            "2000×2000 → 800×800 缩放",
+            "居中裁剪 80% 以上保留主体",
+            "Instagram/Lightroom 常规滤镜",
+            "±20% 亮度/对比度调整",
+            "添加右下角小尺寸 Logo 水印",
+        ],
+        "miss_samples": [
+            "左右/上下镜像翻转",
+            "主体旋转 45° 以上",
+            "50% 以上区域被遮挡/裁切",
+            "完全不同的两张同类图片（如两只不同的猫）",
+        ],
+        "false_positive_rate": "≈ 0.1%",
+        "recommended_scenario": "Pinry 默认推荐，平衡误报与漏报",
+    },
+    {
+        "threshold": 7,
+        "name": "宽松相似",
+        "hit_samples": [
+            "添加大段文字的 meme 图",
+            "手机端 vs 桌面端同场景截图",
+            "不同光线的同角度实拍照片",
+            "黑白 vs 彩色同一照片",
+        ],
+        "miss_samples": ["同场景不同时间（白天/黑夜）、完全不同主体"],
+        "false_positive_rate": "≈ 2~3%",
+        "recommended_scenario": "内容聚类、相似推荐辅助信号",
+    },
+    {
+        "threshold": 10,
+        "name": "粗略分类",
+        "hit_samples": ["同色系风格插画、同构图不同照片（蓝天下的山）"],
+        "miss_samples": ["大部分跨类别图片"],
+        "false_positive_rate": "> 10%",
+        "recommended_scenario": "仅用于粗粒度分类标签辅助，不用于重复检测",
+    },
+]
+
+
 def calculate_phash(file_obj):
     """
     计算平均感知哈希（aHash / meanHash）
@@ -35,12 +95,14 @@ def calculate_phash(file_obj):
       4. 逐个像素与平均值比较，得到 64 位二进制指纹
       5. 转为 16 字符十六进制字符串存储
 
-    汉明距离推荐阈值（结合实际业务）：
-      距离 0-2 : 近乎完全相同 → 格式转换 / 无损压缩 / 仅 EXIF 信息变更
-      距离 3-4 : 高度相似   → 不同压缩等级 / 去水印 / 轻微调色
-      距离 5   : 平衡推荐值  → 兼容缩放、裁剪、滤镜（默认阈值，业界通用值）
-      距离 6-7 : 宽松匹配   → 可识别二次编辑、添加文字，但误报率上升
-      距离 8+  : 仅粗略分类  → 不建议用于重复检测
+    汉明距离推荐阈值（结合实际业务，详见常量 PHASH_THRESHOLD_SAMPLES）：
+      距离 0    : 完全相同    → 格式转换 / 重命名 / 仅 EXIF 信息变更
+      距离 1-2  : 极相似      → 压缩等级变化 / 去隐形水印 / 色彩空间转换
+      距离 3-4  : 高度相似    → 去水印 / 轻微调色 / 小幅缩放
+      距离 5    : 【平衡推荐】→ 兼容缩放、裁剪、常规滤镜（默认值，业界通用）
+      距离 6-7  : 宽松相似    → 可识别二次编辑、加文字，误报率上升
+      距离 8-9  : 近似分类    → 仅用于同类别粗粒度识别
+      距离 10+  : 粗略分类    → 不建议用于重复检测
     """
     try:
         file_obj.seek(0)

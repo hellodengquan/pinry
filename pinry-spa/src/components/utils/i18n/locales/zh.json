@@ -117,6 +117,7 @@
   "warningUrlFetchFailed": "图片下载失败",
   "warningUrlError": "链接错误（{code}）",
   "warningUsedDefaultBoard": "已使用默认画板",
+  "warningAppendedDefaultBoards": "已追加补充默认画板",
   "warningInvalidBoardSkipped": "已跳过无效画板",
   "warningMultipleBoardsTrimmed": "已裁剪为单画板（最高优先级）",
   "warningMaxBoardsExceeded": "画板数量超过上限，已裁剪",

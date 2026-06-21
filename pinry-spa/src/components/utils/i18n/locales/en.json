@@ -117,6 +117,7 @@
     "warningUrlFetchFailed": "Image download failed",
     "warningUrlError": "URL error ({code})",
     "warningUsedDefaultBoard": "Used default board",
+    "warningAppendedDefaultBoards": "Appended default boards",
     "warningInvalidBoardSkipped": "Skipped invalid board(s)",
     "warningMultipleBoardsTrimmed": "Trimmed to single board (highest priority)",
     "warningMaxBoardsExceeded": "Max boards exceeded, trimmed",

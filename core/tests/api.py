@@ -302,12 +302,36 @@ def mock_requests_head_ok(url, **kwargs):
 
 class BatchImportSkippedTests(APITestCase):
     """
-    批量导入三种 skipped 原因的单元测试
+    批量导入 skipped 原因 + Board 归属策略 单元测试
 
-    skipped 原因分类：
-    1. url_became_404     → 导入时二次检测发现 URL 返回 404
-    2. duplicate_fingerprint → 导入时检测到 MD5 与已有或批次内重复
-    3. board_became_invalid → 导入时发现所有指定 board 均失效
+    ┌─────────────────────────────────────────────────────────────────┐
+    │ 【Skipped 原因 × 测试覆盖映射表】                                │
+    ├────┬───────────────────────────┬────────────────────────────────┤
+    │ #  │ Skipped 原因               │ 对应测试方法                   │
+    ├────┼───────────────────────────┼────────────────────────────────┤
+    │ 1  │ url_became_404           │ test_skip_reason_url_became_404│
+    │ 2  │ duplicate_fingerprint    │ test_skip_reason_duplicate_    │
+    │    │                           │        fingerprint             │
+    │ 3  │ board_became_invalid     │ test_skip_reason_board_        │
+    │    │                           │        became_invalid           │
+    │ 混 │ 以上三种 + 一个正常创建   │ test_mixed_skipped_and_created │
+    └────┴───────────────────────────┴────────────────────────────────┘
+
+    ┌─────────────────────────────────────────────────────────────────┐
+    │ 【Board 归属策略 × 测试覆盖映射表】                              │
+    ├──────────────────────────────┬─────────────────────────────────┤
+    │ 策略 / Tiebreaker 场景        │ 对应测试方法                    │
+    ├──────────────────────────────┼─────────────────────────────────┤
+    │ 缺少 board 归属（warning）    │ test_precheck_missing_board    │
+    │                                │        _warning                │
+    │ default_board_ids fallback    │ test_default_board_fallback    │
+    │ 去重 + 优先级（Tiebreaker a） │ test_board_dedupe_preserves_   │
+    │                                │        order                    │
+    │ 用户∩default 交集按用户优先    │ test_board_user_default_       │
+    │   （Tiebreaker b）             │        intersection_tiebreaker  │
+    │ max_boards_per_pin 裁剪       │ test_max_boards_per_pin_trim   │
+    │ allow_multiple_boards=False  │ test_single_board_only_mode     │
+    └──────────────────────────────┴─────────────────────────────────┘
     """
 
     _JSON_TYPE = "application/json"
@@ -318,7 +342,9 @@ class BatchImportSkippedTests(APITestCase):
         self.client.login(username=self.user.username, password='password')
         self.board1 = Board.objects.create(name="board_1", submitter=self.user)
         self.board2 = Board.objects.create(name="board_2", submitter=self.user)
+        self.board3 = Board.objects.create(name="board_3", submitter=self.user)
         self.batch_import_url = reverse("pin-batch-import")
+        self.batch_precheck_url = reverse("pin-batch-precheck")
 
     def tearDown(self):
         _teardown_models()
@@ -531,3 +557,260 @@ class BatchImportSkippedTests(APITestCase):
             f"应包含 board_became_invalid, 实际有: {skipped_reasons}"
         )
         self.assertEqual(len(resp['skipped']), 3, f"应有 3 个 skipped, 实际 {len(resp['skipped'])}")
+
+    # ============================================================
+    #  Board 归属策略 / Warning 触发测试（batch-precheck）
+    # ============================================================
+
+    @mock.patch('requests.head', mock_requests_head_ok)
+    @mock.patch('requests.get', mock_requests_get)
+    def test_precheck_missing_board_warning(self):
+        """
+        Board 归属策略（缺少 board 归属）
+        场景: 用户未传 board_ids 且未配置 default_board_ids
+        → 预检测结果中 warnings 应包含 'missing_board'
+        → can_import 仍为 True（仅 warning，不阻止）
+        """
+        url = 'http://example.com/no-board.png'
+        payload = {
+            "pins": [
+                {"url": url, "board_ids": []}
+            ],
+            "fingerprint_policy": {
+                "enable_exact_match": False,
+                "enable_phash_match": False,
+            },
+            "url_policy": {
+                "check_404_on_precheck": False,
+                "check_404_on_import": False,
+            }
+        }
+        response = self.client.post(
+            self.batch_precheck_url, data=payload, format="json"
+        )
+        resp = response.json()
+        self.assertEqual(response.status_code, 200, response.json())
+        first_result = resp['results'][0]
+        self.assertIn(
+            'missing_board', first_result['warnings'],
+            f"warnings 应包含 'missing_board', 实际: {first_result['warnings']}"
+        )
+        self.assertTrue(
+            first_result['can_import'],
+            "缺少 board 仅是 warning，不应阻止 can_import"
+        )
+
+    @mock.patch('requests.head', mock_requests_head_ok)
+    @mock.patch('requests.get', mock_requests_get)
+    def test_default_board_fallback(self):
+        """
+        Board 归属策略（default_board_ids fallback）
+        场景: 用户未传 board_ids，但 board_policy 提供了 default_board_ids
+        → 预检测结果应触发 'used_default_board' warning
+        → processed board_ids 应等于 default_board_ids
+        """
+        url = 'http://example.com/with-default.png'
+        payload = {
+            "pins": [
+                {"url": url, "board_ids": []}
+            ],
+            "board_policy": {
+                "default_board_ids": [self.board2.id, self.board3.id],
+            },
+            "fingerprint_policy": {
+                "enable_exact_match": False,
+                "enable_phash_match": False,
+            },
+            "url_policy": {
+                "check_404_on_precheck": False,
+                "check_404_on_import": False,
+            }
+        }
+        response = self.client.post(
+            self.batch_precheck_url, data=payload, format="json"
+        )
+        resp = response.json()
+        first_result = resp['results'][0]
+        self.assertIn(
+            'used_default_board', first_result['warnings'],
+            f"应触发 'used_default_board' warning, 实际: {first_result['warnings']}"
+        )
+        self.assertEqual(
+            first_result['board_ids'],
+            [self.board2.id, self.board3.id],
+            "应正确回退到 default_board_ids 并保持原顺序"
+        )
+
+    @mock.patch('requests.head', mock_requests_head_ok)
+    @mock.patch('requests.get', mock_requests_get)
+    def test_board_dedupe_preserves_order(self):
+        """
+        Tiebreaker (a): board_ids 内部重复去重后保留首次出现（即原优先级顺序）
+        场景: board_ids = [B2, B1, B2, B3]（B2 在位置 0 和 2 重复）
+        → 去重后应为 [B2, B1, B3]（保留 B2 首次出现的最高优先级）
+        → 应触发 'duplicate_boards' warning
+        """
+        url = 'http://example.com/dedup-order.png'
+        payload = {
+            "pins": [
+                {
+                    "url": url,
+                    "board_ids": [self.board2.id, self.board1.id, self.board2.id, self.board3.id],
+                }
+            ],
+            "fingerprint_policy": {
+                "enable_exact_match": False,
+                "enable_phash_match": False,
+            },
+            "url_policy": {
+                "check_404_on_precheck": False,
+                "check_404_on_import": False,
+            }
+        }
+        response = self.client.post(
+            self.batch_precheck_url, data=payload, format="json"
+        )
+        resp = response.json()
+        first_result = resp['results'][0]
+        self.assertIn(
+            'duplicate_boards', first_result['warnings'],
+            f"应触发 'duplicate_boards' warning, 实际: {first_result['warnings']}"
+        )
+        self.assertEqual(
+            first_result['board_ids'],
+            [self.board2.id, self.board1.id, self.board3.id],
+            "去重后应保留首次出现的顺序: [B2, B1, B3]"
+        )
+
+    @mock.patch('requests.head', mock_requests_head_ok)
+    @mock.patch('requests.get', mock_requests_get)
+    def test_board_user_default_intersection_tiebreaker(self):
+        """
+        Tiebreaker (b): 用户 board_ids ∩ default_board_ids 有交集时
+                        以用户 board_ids 中的位置为准
+        场景: user=[B3, B1], default=[B1, B2]（B1 在 default 中也出现）
+        → 合并后应为 [B3, B1, B2]（B1 位置按用户的 index 1，default 中不重复追加）
+        → 应触发 'appended_default_boards' warning（B2 被追加）
+        """
+        url = 'http://example.com/tiebreaker-b.png'
+        payload = {
+            "pins": [
+                {
+                    "url": url,
+                    "board_ids": [self.board3.id, self.board1.id],
+                }
+            ],
+            "board_policy": {
+                "default_board_ids": [self.board1.id, self.board2.id],
+            },
+            "fingerprint_policy": {
+                "enable_exact_match": False,
+                "enable_phash_match": False,
+            },
+            "url_policy": {
+                "check_404_on_precheck": False,
+                "check_404_on_import": False,
+            }
+        }
+        response = self.client.post(
+            self.batch_precheck_url, data=payload, format="json"
+        )
+        resp = response.json()
+        first_result = resp['results'][0]
+        self.assertIn(
+            'appended_default_boards', first_result['warnings'],
+            f"应触发 'appended_default_boards' warning, 实际: {first_result['warnings']}"
+        )
+        self.assertEqual(
+            first_result['board_ids'],
+            [self.board3.id, self.board1.id, self.board2.id],
+            "Tiebreaker (b): B1 按用户位置(1)，B2 从 default 追加，结果 [B3, B1, B2]"
+        )
+
+    @mock.patch('requests.head', mock_requests_head_ok)
+    @mock.patch('requests.get', mock_requests_get)
+    def test_max_boards_per_pin_trim(self):
+        """
+        Board 裁剪策略: max_boards_per_pin=N 时按优先级保留前 N 个
+        场景: board_ids=[B1, B2, B3]，配置 max_boards_per_pin=2
+        → 应保留 [B1, B2]（前 2 个最高优先级）
+        → 应触发 'max_boards_exceeded' warning
+        """
+        url = 'http://example.com/max-boards.png'
+        payload = {
+            "pins": [
+                {
+                    "url": url,
+                    "board_ids": [self.board1.id, self.board2.id, self.board3.id],
+                }
+            ],
+            "board_policy": {
+                "max_boards_per_pin": 2,
+            },
+            "fingerprint_policy": {
+                "enable_exact_match": False,
+                "enable_phash_match": False,
+            },
+            "url_policy": {
+                "check_404_on_precheck": False,
+                "check_404_on_import": False,
+            }
+        }
+        response = self.client.post(
+            self.batch_precheck_url, data=payload, format="json"
+        )
+        resp = response.json()
+        first_result = resp['results'][0]
+        self.assertIn(
+            'max_boards_exceeded', first_result['warnings'],
+            f"应触发 'max_boards_exceeded' warning, 实际: {first_result['warnings']}"
+        )
+        self.assertEqual(
+            first_result['board_ids'],
+            [self.board1.id, self.board2.id],
+            "max_boards_per_pin=2 时应裁剪为前 2 个"
+        )
+
+    @mock.patch('requests.head', mock_requests_head_ok)
+    @mock.patch('requests.get', mock_requests_get)
+    def test_single_board_only_mode(self):
+        """
+        Board 裁剪策略: allow_multiple_boards=False 只保留最高优先级一个
+        场景: board_ids=[B3, B1, B2]，allow_multiple_boards=False
+        → 应仅保留 [B3]（最高优先级，index=0）
+        → 应触发 'multiple_boards_trimmed' warning
+        """
+        url = 'http://example.com/single-board.png'
+        payload = {
+            "pins": [
+                {
+                    "url": url,
+                    "board_ids": [self.board3.id, self.board1.id, self.board2.id],
+                }
+            ],
+            "board_policy": {
+                "allow_multiple_boards": False,
+            },
+            "fingerprint_policy": {
+                "enable_exact_match": False,
+                "enable_phash_match": False,
+            },
+            "url_policy": {
+                "check_404_on_precheck": False,
+                "check_404_on_import": False,
+            }
+        }
+        response = self.client.post(
+            self.batch_precheck_url, data=payload, format="json"
+        )
+        resp = response.json()
+        first_result = resp['results'][0]
+        self.assertIn(
+            'multiple_boards_trimmed', first_result['warnings'],
+            f"应触发 'multiple_boards_trimmed' warning, 实际: {first_result['warnings']}"
+        )
+        self.assertEqual(
+            first_result['board_ids'],
+            [self.board3.id],
+            "allow_multiple_boards=False 时应裁剪为最高优先级 [B3]"
+        )

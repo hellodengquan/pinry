@@ -388,6 +388,7 @@ export default {
         url_unreachable: this.$t('warningUrlUnreachable'),
         url_fetch_failed: this.$t('warningUrlFetchFailed'),
         used_default_board: this.$t('warningUsedDefaultBoard'),
+        appended_default_boards: this.$t('warningAppendedDefaultBoards'),
         invalid_board_skipped: this.$t('warningInvalidBoardSkipped'),
         multiple_boards_trimmed: this.$t('warningMultipleBoardsTrimmed'),
         max_boards_exceeded: this.$t('warningMaxBoardsExceeded'),

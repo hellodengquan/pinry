@@ -117,6 +117,7 @@
     "warningUrlFetchFailed": "Échec du téléchargement",
     "warningUrlError": "Erreur URL ({code})",
     "warningUsedDefaultBoard": "Tableau par défaut utilisé",
+    "warningAppendedDefaultBoards": "Tableaux par défaut ajoutés",
     "warningInvalidBoardSkipped": "Tableau invalide ignoré",
     "warningMultipleBoardsTrimmed": "Réduit à un seul tableau (priorité max)",
     "warningMaxBoardsExceeded": "Nb max de tableaux dépassé, réduit",

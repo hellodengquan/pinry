@@ -279,30 +279,41 @@ class BatchFingerprintPolicySerializer(serializers.Serializer):
     """
     指纹匹配策略配置
 
-    pHash 阈值选择依据（基于 DCT 感知哈希算法）：
-    - 阈值 0-2：几乎完全相同（仅格式转换/极轻微压缩），误报率极低
-    - 阈值 3-4：高度相似（不同压缩等级/水印），适合严格去重场景
-    - 阈值 5  ：平衡值（默认），涵盖缩放/裁剪/滤镜等常见变体，
-               误报率约 0.1%，漏报率约 5%（行业通用推荐值）
-    - 阈值 6-7：宽松匹配，可识别二次编辑，但误报率显著上升
-    - 阈值 8+ ：仅做粗略分类，不建议用于重复检测
+    【pHash 阈值选择依据（阈值 5 的默认值论证）】
+    ┌──────────┬─────────────────────────────────────────────────────────────┐
+    │ 阈值  0   │ 命中: PNG→JPG 转格式 / 文件重命名 / 仅改 EXIF              │
+    │          │ 漏报: 任何像素修改        FP: ≈0%      用途: 取证级严格去重  │
+    ├──────────┼─────────────────────────────────────────────────────────────┤
+    │ 阈值  2   │ 命中: JPG 95→50 压缩 / 去隐形水印 / 色彩空间转换           │
+    │          │ 漏报: 可见水印 / ±10% 亮度   FP: <0.01%  用途: 素材库管理    │
+    ├──────────┼─────────────────────────────────────────────────────────────┤
+    │★阈值  5 ★│ 命中: 缩放 2000→800 / 居中裁剪 80%+ / 常规滤镜 / ±20% 亮度 │
+    │(默认推荐) │ 漏报: 镜像 / 旋转>45° / 裁切 >50%  FP:≈0.1% 用途: Pinry 默认│
+    ├──────────┼─────────────────────────────────────────────────────────────┤
+    │ 阈值  7   │ 命中: 加文字 meme 图 / 手机 vs 桌面截图 / 黑白 vs 彩色      │
+    │          │ 漏报: 白天 vs 黑夜同场景     FP: ≈2-3%   用途: 相似推荐辅助  │
+    ├──────────┼─────────────────────────────────────────────────────────────┤
+    │ 阈值 10+  │ 命中: 同色系 / 同构图分类                                   │
+    │          │ 漏报: 多数跨类别图片         FP: >10%    用途: 粗粒度分类     │
+    └──────────┴─────────────────────────────────────────────────────────────┘
+    注: 命中样本对照详见 django_images.models.PHASH_THRESHOLD_SAMPLES 常量
     """
     enable_exact_match = serializers.BooleanField(
         default=True,
-        help_text="MD5 精确匹配 - 完全相同的图片，命中后阻止导入（精确去重）"
+        help_text="MD5 精确匹配（exact match）- 完全相同的图片，命中后阻止导入（精确去重）"
     )
     enable_phash_match = serializers.BooleanField(
         default=True,
-        help_text="感知哈希匹配 - 检测相似/变体图片，命中后仅警告（相似提醒）"
+        help_text="感知哈希匹配（pHash / perceptual）- 检测相似/变体图片，命中后仅警告（相似提醒）"
     )
     phash_threshold = serializers.IntegerField(
         default=5,
         min_value=0,
         max_value=32,
         help_text=(
-            "pHash 汉明距离阈值："
-            "0-2=几乎完全相同，3-4=高度相似，"
-            "5=平衡推荐值（默认），6-7=宽松匹配，8+=仅粗略分类"
+            "pHash 汉明距离阈值（建议值）："
+            "0=完全相同，2=极相似(FP<0.01%)，"
+            "5=平衡推荐(默认, FP≈0.1%)，7=宽松(FP≈2-3%)，10+=粗分类"
         )
     )
 
@@ -311,11 +322,24 @@ class BatchBoardPolicySerializer(serializers.Serializer):
     """
     多 Board 归属策略
 
-    优先级规则：
-    - 按 board_ids 传入顺序决定优先级（靠前 = 优先级高）
-    - 当 allow_multiple_boards=False 时，只保留优先级最高的一个
-    - 当部分 board 无效时，用后续有效 board 依次补位
-    - default_board_ids 在用户未指定 board 时使用
+    【优先级 + Tiebreaker 判定规则（严格按顺序处理）】
+    ┌─ 1. 优先级来源（由高到低）
+    │   ├─ 用户显式指定的 board_ids（按传入顺序，index 越小优先级越高）
+    │   └─ 配置的 default_board_ids（按传入顺序，优先级低于用户显式指定）
+    │
+    ├─ 2. Tiebreaker 决胜规则（相同优先级场景）
+    │   ├─ (a) board_ids 内重复（如 [1, 2, 1]）
+    │   │     → 保留首次出现的位置，丢弃后续重复（不影响其他项顺序）
+    │   │     → 例: [1, 2, 1] → [1, 2]（1 仍为最高优先级）
+    │   ├─ (b) 用户 board_ids ∩ default_board_ids 有交集
+    │   │     → 以用户 board_ids 中的位置为准，default 中重复项不再追加
+    │   │     → 例: user=[3, 1], default=[1, 2] → 合并后 [3, 1, 2]
+    │   └─ (c) 用户 board_ids 为空且启用默认 → 使用 default_board_ids 的原顺序
+    │
+    └─ 3. 裁剪规则（仍按优先级保留高者）
+        ├─ allow_multiple_boards=False → 仅保留 [0]（最高优先级 1 个）
+        ├─ max_boards_per_pin=N      → 仅保留 [0:N]（最高优先级 N 个）
+        └─ 无效 board 过滤后         → 同优先级下用下一个有效 board 依次补位
     """
     allow_multiple_boards = serializers.BooleanField(
         default=True,
@@ -323,18 +347,18 @@ class BatchBoardPolicySerializer(serializers.Serializer):
     )
     dedupe_board_ids = serializers.BooleanField(
         default=True,
-        help_text="是否自动去除重复的 board_id（保留首次出现，即优先级最高的）"
+        help_text="是否自动去除重复的 board_id（按 tiebreaker 规则，保留首次出现即优先级最高的）"
     )
     default_board_ids = serializers.ListField(
         child=serializers.IntegerField(min_value=1),
         required=False,
         default=list,
-        help_text="默认画板 ID 列表：当用户未指定 board_ids 时使用这些画板，同样按优先级排序"
+        help_text="默认画板 ID 列表（优先级低于用户显式 board_ids，按列表顺序决定内部优先级）"
     )
     max_boards_per_pin = serializers.IntegerField(
         default=0,
         min_value=0,
-        help_text="单 Pin 最大归属画板数：0=不限制，>0 时只保留优先级最高的 N 个有效画板"
+        help_text="单 Pin 最大归属画板数：0=不限制，>0 时按优先级仅保留最高的前 N 个"
     )
 
 

@@ -68,15 +68,31 @@ class PinViewSet(viewsets.ModelViewSet):
 
     def _check_boards(self, board_ids, user_board_ids, board_policy):
         """
-        校验并处理多 Board 归属，按优先级规则返回最终 board_ids 列表
+        校验并处理多 Board 归属，按优先级 + Tiebreaker 规则返回最终 board_ids 列表
 
-        处理顺序（按优先级）：
-          1. 若用户未传 board_ids，则使用默认 default_board_ids
-          2. 按传入顺序保留优先级（靠前 = 优先级高）
-          3. 去重（保留首次出现，即优先级最高的）
-          4. 过滤无效 board（不存在或无权限），并用后续有效 board 补位
-          5. 若禁止多 board，则只保留优先级最高的一个
-          6. 若设置 max_boards_per_pin，则截断保留前 N 个
+        ============================================================
+         Tiebreaker（同优先级决胜）完整规则（与 serializer 文档一致）
+        ============================================================
+        1. 优先级来源（高 → 低）
+           ├─ 用户显式指定的 board_ids（按 index，越小越优先）
+           └─ default_board_ids（按 index，整体低于用户显式指定）
+
+        2. 三种 Tiebreaker 场景
+           (a) board_ids 内重复（如 [B1, B2, B1]）
+               → 保留首次出现（丢弃后续重复），不影响其他项顺序
+               → 例: [B1, B2, B1] → [B1, B2]，B1 仍是最高优先级
+
+           (b) 用户 board_ids ∩ default_board_ids 有交集
+               → 以用户 board_ids 中的位置为准，default 中的重复项不追加
+               → 例: user=[B3, B1], default=[B1, B2] → 合并后 [B3, B1, B2]
+
+           (c) 用户 board_ids 为空 → 直接使用 default_board_ids 的原顺序
+
+        3. 裁剪（均按优先级保留高者）
+           ├─ allow_multiple_boards=False → 仅保留 [0]（最高优先级 1 个）
+           ├─ max_boards_per_pin=N       → 仅保留 [0:N]（前 N 个最高优先级）
+           └─ 无效 board 过滤后           → 下一个有效 board 依次补位（保持原优先级序）
+        ============================================================
 
         Returns:
             (issues, warnings, processed_ids)
@@ -84,9 +100,28 @@ class PinViewSet(viewsets.ModelViewSet):
         issues = []
         warnings = []
 
-        input_ids = list(board_ids)
-        if not input_ids:
-            default_ids = board_policy.get('default_board_ids', []) or []
+        explicit_ids = list(board_ids)
+        default_ids = board_policy.get('default_board_ids', []) or []
+
+        # --- Tiebreaker (b): 用户显式 + default 合并，交集以用户位置为准 ---
+        if explicit_ids and default_ids:
+            explicit_set = set(explicit_ids)
+            # default 中仅追加不在 explicit 中的项，避免冲突
+            merged_ids = list(explicit_ids)
+            appended_defaults = 0
+            for bid in default_ids:
+                if bid not in explicit_set:
+                    merged_ids.append(bid)
+                    explicit_set.add(bid)
+                    appended_defaults += 1
+            input_ids = merged_ids
+            if appended_defaults > 0:
+                warnings.append('appended_default_boards')
+        elif explicit_ids:
+            # --- 仅用户显式 ---
+            input_ids = explicit_ids
+        else:
+            # --- Tiebreaker (c): 仅 default ---
             if default_ids:
                 input_ids = list(default_ids)
                 warnings.append('used_default_board')
@@ -94,6 +129,7 @@ class PinViewSet(viewsets.ModelViewSet):
                 warnings.append('missing_board')
                 return issues, warnings, []
 
+        # --- Tiebreaker (a): 去重，保留首次出现（即优先级高的位置）---
         seen = set()
         deduped_ids = []
         has_duplicates = False
@@ -108,6 +144,7 @@ class PinViewSet(viewsets.ModelViewSet):
             if not board_policy.get('dedupe_board_ids', True):
                 return issues + ['duplicate_boards_not_allowed'], warnings, []
 
+        # --- 过滤无效 board（下一个有效依次补位）---
         valid_ids = []
         invalid_ids = []
         for bid in deduped_ids:
@@ -118,16 +155,19 @@ class PinViewSet(viewsets.ModelViewSet):
         if invalid_ids:
             warnings.append('invalid_board_skipped')
 
+        # --- 裁剪: 禁止多 board ---
         if not board_policy.get('allow_multiple_boards', True) and len(valid_ids) > 1:
             warnings.append('multiple_boards_trimmed')
             valid_ids = valid_ids[:1]
 
+        # --- 裁剪: 最大数量限制 ---
         max_boards = board_policy.get('max_boards_per_pin', 0)
         if max_boards and max_boards > 0 and len(valid_ids) > max_boards:
             warnings.append('max_boards_exceeded')
             valid_ids = valid_ids[:max_boards]
 
-        if not valid_ids and (deduped_ids or board_policy.get('default_board_ids')):
+        # --- 所有 board 均失效 ---
+        if not valid_ids and (deduped_ids or default_ids):
             warnings.append('no_valid_board_left')
             warnings.append('missing_board')
 
