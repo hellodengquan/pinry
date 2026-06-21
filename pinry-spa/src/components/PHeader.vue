@@ -37,6 +37,11 @@
                   class="navbar-item">
                   {{ $t("boardLink") }}
                 </a>
+                <a
+                  @click="batchImport"
+                  class="navbar-item">
+                  {{ $t("batchImportLink") }}
+                </a>
               </div>
             </div>
             <div
@@ -191,6 +196,12 @@ export default {
     },
     createBoard() {
       modals.openBoardCreate(this);
+    },
+    batchImport() {
+      modals.openBatchImport(
+        this,
+        { username: this.user.meta.username },
+      );
     },
     signUp() {
       modals.openSignUp(this, this.onSignUpSucceed);

@@ -108,6 +108,14 @@ const Pin = {
       data,
     );
   },
+  batchPrecheck(pins) {
+    const url = `${API_PREFIX}pins/batch-precheck/`;
+    return axios.post(url, { pins });
+  },
+  batchImport(pins) {
+    const url = `${API_PREFIX}pins/batch-import/`;
+    return axios.post(url, { pins });
+  },
 };
 
 

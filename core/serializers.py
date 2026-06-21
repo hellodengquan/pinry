@@ -273,3 +273,28 @@ class TagAutoCompleteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Tag
         fields = ('name', )
+
+
+class BatchPinItemSerializer(serializers.Serializer):
+    url = serializers.CharField(max_length=2048, required=False, allow_blank=True, allow_null=True)
+    referer = serializers.CharField(max_length=2048, required=False, allow_blank=True, allow_null=True)
+    description = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    tags = serializers.ListField(
+        child=serializers.CharField(max_length=100),
+        required=False,
+        default=list
+    )
+    private = serializers.BooleanField(required=False, default=False)
+    board_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        required=False,
+        default=list
+    )
+
+
+class BatchPrecheckRequestSerializer(serializers.Serializer):
+    pins = BatchPinItemSerializer(many=True, required=True)
+
+
+class BatchImportRequestSerializer(serializers.Serializer):
+    pins = BatchPinItemSerializer(many=True, required=True)

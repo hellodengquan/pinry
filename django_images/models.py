@@ -49,6 +49,15 @@ class Image(models.Model):
                               max_length=255)
     height = models.PositiveIntegerField(default=0, editable=False)
     width = models.PositiveIntegerField(default=0, editable=False)
+    hash = models.CharField(max_length=32, blank=True, null=True, db_index=True, editable=False)
+
+    def save(self, *args, **kwargs):
+        if self.image and not self.hash:
+            hasher = hashlib.md5()
+            for chunk in self.image.chunks():
+                hasher.update(chunk)
+            self.hash = hasher.hexdigest()
+        super(Image, self).save(*args, **kwargs)
 
     def get_by_size(self, size):
         return self.thumbnail_set.get(size=size)

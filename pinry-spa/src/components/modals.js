@@ -3,6 +3,7 @@ import LoginForm from './LoginForm.vue';
 import SignUpForm from './SignUpForm.vue';
 import BoardEdit from './BoardEdit.vue';
 import Add2Board from './pin_edit/Add2Board.vue';
+import BatchImportModal from './pin_edit/BatchImportModal.vue';
 
 
 function openPinEdit(vm, props = null, onCreated = null) {
@@ -83,6 +84,24 @@ function openSignUp(vm, onSignUpSucceed) {
   });
 }
 
+function openBatchImport(vm, props = null, onDone = null) {
+  vm.$buefy.modal.open(
+    {
+      parent: vm,
+      component: BatchImportModal,
+      props,
+      hasModalCard: true,
+      events: {
+        batchImportDone() {
+          if (onDone !== null) {
+            onDone();
+          }
+        },
+      },
+    },
+  );
+}
+
 export default {
   openBoardCreate,
   openBoardEdit,
@@ -90,4 +109,5 @@ export default {
   openPinEdit,
   openLogin,
   openSignUp,
+  openBatchImport,
 };
