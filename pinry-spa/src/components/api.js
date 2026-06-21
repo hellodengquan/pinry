@@ -274,8 +274,15 @@ const User = {
 
 const Tag = {
   fetchList() {
-    const url = `${API_PREFIX}tags-auto-complete/`;
+    const url = `${API_PREFIX}tags/`;
     return axios.get(url);
+  },
+  merge(sourceTag, targetTag) {
+    const url = `${API_PREFIX}tags/merge/`;
+    return axios.post(url, {
+      source_tag: sourceTag,
+      target_tag: targetTag,
+    });
   },
 };
 

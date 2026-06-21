@@ -166,6 +166,7 @@ export default {
   created() {
     this.fetchBoardList();
     this.fetchTagList();
+    bus.bus.$on(bus.events.refreshTags, this.fetchTagList);
     if (this.isEdit) {
       this.editorMeta.title = 'EditPinTitle';
       this.pinModel.form.url.value = this.existedPin.url;
@@ -182,11 +183,15 @@ export default {
       this.pinModel.form.description.value = this.fromUrl.description;
     }
   },
+  beforeDestroy() {
+    bus.bus.$off(bus.events.refreshTags, this.fetchTagList);
+  },
   methods: {
     fetchTagList() {
+      const self = this;
       API.Tag.fetchList().then(
         (resp) => {
-          this.tagOptions = resp.data;
+          self.tagOptions = resp.data;
         },
       );
     },

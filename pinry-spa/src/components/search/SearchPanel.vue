@@ -40,6 +40,7 @@
 
 <script>
 import api from '../api';
+import bus from '../utils/bus';
 
 export default {
   name: 'FilterSelector',
@@ -72,6 +73,23 @@ export default {
         { filterType: this.filterType, selected: this.boardText },
       );
     },
+    fetchTagList() {
+      const self = this;
+      api.Tag.fetchList().then(
+        (resp) => {
+          const options = [];
+          resp.data.forEach(
+            (tag) => {
+              options.push(tag.name);
+            },
+          );
+          self.options.Tag = options;
+          if (self.filterType === 'Tag') {
+            self.selectedOption = self.options.Tag;
+          }
+        },
+      );
+    },
   },
   watch: {
     filterType(newVal) {
@@ -98,17 +116,11 @@ export default {
     },
   },
   created() {
-    api.Tag.fetchList().then(
-      (resp) => {
-        const options = [];
-        resp.data.forEach(
-          (tag) => {
-            options.push(tag.name);
-          },
-        );
-        this.options.Tag = options;
-      },
-    );
+    this.fetchTagList();
+    bus.bus.$on(bus.events.refreshTags, this.fetchTagList);
+  },
+  beforeDestroy() {
+    bus.bus.$off(bus.events.refreshTags, this.fetchTagList);
   },
 };
 </script>
