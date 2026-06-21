@@ -4,14 +4,18 @@ import requests
 from io import BytesIO
 
 from django.conf import settings
+from django.core.cache import cache
 from django.core.files.uploadedfile import InMemoryUploadedFile
 from django.db import models
 from django.dispatch import receiver
 
 from django_images.models import Image as BaseImage, Thumbnail
 from taggit.managers import TaggableManager
+from taggit.models import Tag
 
 from users.models import User
+
+TAGS_CACHE_KEY_PREFIX = 'tags_auto_complete_list'
 
 
 class ImageManager(models.Manager):
@@ -120,3 +124,13 @@ def delete_pin_images(sender, instance, **kwargs):
         instance.image.delete()
     except Image.DoesNotExist:
         pass
+
+
+@receiver(models.signals.post_save, sender=Tag)
+def invalidate_tags_cache_on_save(sender, instance, **kwargs):
+    cache.delete_pattern(f'*{TAGS_CACHE_KEY_PREFIX}*')
+
+
+@receiver(models.signals.post_delete, sender=Tag)
+def invalidate_tags_cache_on_delete(sender, instance, **kwargs):
+    cache.delete_pattern(f'*{TAGS_CACHE_KEY_PREFIX}*')

@@ -284,6 +284,12 @@ const Tag = {
       target_tag: targetTag,
     });
   },
+  verify(tagNames) {
+    const params = new URLSearchParams();
+    tagNames.forEach((name) => params.append('tag_names', name));
+    const url = `${API_PREFIX}tags/verify/?${params.toString()}`;
+    return axios.get(url);
+  },
 };
 
 export default {

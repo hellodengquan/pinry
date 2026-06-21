@@ -54,6 +54,8 @@ export default {
       name: '',
       boardText: '',
       selected: null,
+      currentSearchTag: null,
+      pendingRefresh: false,
     };
   },
   methods: {
@@ -75,7 +77,8 @@ export default {
     },
     fetchTagList() {
       const self = this;
-      api.Tag.fetchList().then(
+      self.pendingRefresh = true;
+      return api.Tag.fetchList().then(
         (resp) => {
           const options = [];
           resp.data.forEach(
@@ -87,7 +90,61 @@ export default {
           if (self.filterType === 'Tag') {
             self.selectedOption = self.options.Tag;
           }
+          self.pendingRefresh = false;
+          self.handleTagListRefresh();
         },
+      ).catch(() => {
+        self.pendingRefresh = false;
+      });
+    },
+    handleTagListRefresh() {
+      if (this.currentSearchTag && this.filterType === 'Tag') {
+        this.verifyAndReSearch();
+      }
+    },
+    verifyAndReSearch() {
+      const self = this;
+      const tagToVerify = this.currentSearchTag;
+      api.Tag.verify([tagToVerify]).then(
+        (resp) => {
+          const { invalid_tags } = resp.data;
+          if (invalid_tags.length > 0) {
+            const tagExists = self.options.Tag.some(
+              (t) => t.toLowerCase() === tagToVerify.toLowerCase(),
+            );
+            if (!tagExists) {
+              const closeMatch = self.options.Tag.find(
+                (t) => t.toLowerCase().indexOf(tagToVerify.toLowerCase()) >= 0
+                  || tagToVerify.toLowerCase().indexOf(t.toLowerCase()) >= 0,
+              );
+              if (closeMatch) {
+                self.switchTagSearch(tagToVerify, closeMatch);
+              } else {
+                self.currentSearchTag = null;
+              }
+            }
+          }
+        },
+      );
+    },
+    switchTagSearch(oldTag, newTag) {
+      this.name = newTag;
+      this.selected = newTag;
+      this.currentSearchTag = newTag;
+      this.$emit(
+        'selected',
+        {
+          filterType: 'Tag',
+          selected: newTag,
+          mergedFrom: oldTag,
+        },
+      );
+    },
+    onTagSelected(tag) {
+      this.currentSearchTag = tag;
+      this.$emit(
+        'selected',
+        { filterType: this.filterType, selected: tag },
       );
     },
   },
@@ -96,10 +153,9 @@ export default {
       this.selectOption(newVal);
     },
     selected(newVal) {
-      this.$emit(
-        'selected',
-        { filterType: this.filterType, selected: newVal },
-      );
+      if (newVal && this.filterType === 'Tag') {
+        this.onTagSelected(newVal);
+      }
     },
   },
   computed: {

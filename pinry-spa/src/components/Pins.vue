@@ -146,13 +146,23 @@ export default {
           tagFilter: null,
           userFilter: null,
           boardFilter: null,
+          isMergeSwitch: false,
         };
       },
+    },
+    refreshRequired: {
+      type: Boolean,
+      default: false,
     },
   },
   watch: {
     pinFilters() {
       this.reset();
+    },
+    refreshRequired(newVal) {
+      if (newVal) {
+        this.reset();
+      }
     },
   },
   methods: {
