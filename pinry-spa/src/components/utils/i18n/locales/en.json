@@ -116,8 +116,14 @@
     "warningUrlUnreachable": "URL unreachable",
     "warningUrlFetchFailed": "Image download failed",
     "warningUrlError": "URL error ({code})",
+    "warningUsedDefaultBoard": "Used default board",
+    "warningInvalidBoardSkipped": "Skipped invalid board(s)",
+    "warningMultipleBoardsTrimmed": "Trimmed to single board (highest priority)",
+    "warningMaxBoardsExceeded": "Max boards exceeded, trimmed",
+    "warningNoValidBoardLeft": "No valid board available",
     "skipReasonUrlBecame404": "URL became 404 after precheck",
     "skipReasonDuplicateFingerprint": "Duplicate fingerprint",
+    "skipReasonBoardBecameInvalid": "Board became invalid",
     "batchImportSkipped": "Skipped",
     "batchImportSkippedCount": "{count} skipped"
 }

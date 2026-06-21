@@ -67,27 +67,71 @@ class PinViewSet(viewsets.ModelViewSet):
             return 'unreachable'
 
     def _check_boards(self, board_ids, user_board_ids, board_policy):
+        """
+        校验并处理多 Board 归属，按优先级规则返回最终 board_ids 列表
+
+        处理顺序（按优先级）：
+          1. 若用户未传 board_ids，则使用默认 default_board_ids
+          2. 按传入顺序保留优先级（靠前 = 优先级高）
+          3. 去重（保留首次出现，即优先级最高的）
+          4. 过滤无效 board（不存在或无权限），并用后续有效 board 补位
+          5. 若禁止多 board，则只保留优先级最高的一个
+          6. 若设置 max_boards_per_pin，则截断保留前 N 个
+
+        Returns:
+            (issues, warnings, processed_ids)
+        """
         issues = []
         warnings = []
-        processed_ids = list(board_ids)
 
-        if len(board_ids) != len(set(board_ids)):
+        input_ids = list(board_ids)
+        if not input_ids:
+            default_ids = board_policy.get('default_board_ids', []) or []
+            if default_ids:
+                input_ids = list(default_ids)
+                warnings.append('used_default_board')
+            else:
+                warnings.append('missing_board')
+                return issues, warnings, []
+
+        seen = set()
+        deduped_ids = []
+        has_duplicates = False
+        for bid in input_ids:
+            if bid in seen:
+                has_duplicates = True
+            else:
+                seen.add(bid)
+                deduped_ids.append(bid)
+        if has_duplicates:
             warnings.append('duplicate_boards')
-            if board_policy.get('dedupe_board_ids', True):
-                processed_ids = list(set(board_ids))
+            if not board_policy.get('dedupe_board_ids', True):
+                return issues + ['duplicate_boards_not_allowed'], warnings, []
 
-        if not board_policy.get('allow_multiple_boards', True) and len(processed_ids) > 1:
-            issues.append('multiple_boards_not_allowed')
-            processed_ids = processed_ids[:1]
+        valid_ids = []
+        invalid_ids = []
+        for bid in deduped_ids:
+            if bid in user_board_ids:
+                valid_ids.append(bid)
+            else:
+                invalid_ids.append(bid)
+        if invalid_ids:
+            warnings.append('invalid_board_skipped')
 
-        invalid_boards = [bid for bid in processed_ids if bid not in user_board_ids]
-        if invalid_boards:
-            issues.append('invalid_board')
+        if not board_policy.get('allow_multiple_boards', True) and len(valid_ids) > 1:
+            warnings.append('multiple_boards_trimmed')
+            valid_ids = valid_ids[:1]
 
-        if not processed_ids:
+        max_boards = board_policy.get('max_boards_per_pin', 0)
+        if max_boards and max_boards > 0 and len(valid_ids) > max_boards:
+            warnings.append('max_boards_exceeded')
+            valid_ids = valid_ids[:max_boards]
+
+        if not valid_ids and (deduped_ids or board_policy.get('default_board_ids')):
+            warnings.append('no_valid_board_left')
             warnings.append('missing_board')
 
-        return issues, warnings, processed_ids
+        return issues, warnings, valid_ids
 
     def _check_fingerprints(self, img_content, url, user, md5_seen, phash_seen,
                            fp_policy):
@@ -220,6 +264,35 @@ class PinViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'], url_path='batch-import')
     def batch_import(self, request):
+        """
+        批量导入确认接口
+
+        skipped_pins 的原因分类（三种跳过原因）：
+        ---------------------------------------------------------------
+        1. url_became_404
+           触发时机：导入期二次校验
+           条件    ：check_404_on_import=True 时，HEAD 请求返回 404
+           说明    ：预检通过后，原链接被删除/失效，提前终止避免无效下载
+                    （区别于 url_fetch_failed 归类在 failed_pins）
+
+        2. duplicate_fingerprint
+           触发时机：导入期下载图片后
+           条件    ：enable_exact_match=True 时，MD5 与已有 Pin 或批次内重复
+           说明    ：预检和导入之间可能新增了 Pin，做最终精确去重
+
+        3. board_became_invalid
+           触发时机：导入期 Board 校验
+           条件    ：预检时有效的 board_id，在导入时不存在或用户无权限
+           说明    ：预检后 Board 可能被删除/权限变更，拒绝导入到非法 Board
+                    （本场景仅在该 Pin 的所有 Board 均失效时触发跳过；
+                     若仍有有效 Board 则继续导入，仅记录 warning）
+        ---------------------------------------------------------------
+
+        返回字段:
+            created: 成功创建的 Pin 列表
+            failed : 出现异常或配置错误的条目（非跳过）
+            skipped: 因上述三种规则主动跳过的条目
+        """
         serializer = api.BatchImportRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         pins_data = serializer.validated_data['pins']
@@ -254,9 +327,19 @@ class PinViewSet(viewsets.ModelViewSet):
                     failed_pins.append({'index': idx, 'error': 'missing_url'})
                     continue
 
-                _, _, processed_board_ids = self._check_boards(
+                _, board_warnings, processed_board_ids = self._check_boards(
                     board_ids, user_board_ids, board_policy
                 )
+
+                if (board_ids or board_policy.get('default_board_ids')) \
+                        and not processed_board_ids \
+                        and 'no_valid_board_left' in board_warnings:
+                    skipped_pins.append({
+                        'index': idx,
+                        'url': url,
+                        'reason': 'board_became_invalid'
+                    })
+                    continue
 
                 if quick_check_404 and not skip_prechecked:
                     url_status = self._check_url_404(url, referer, timeout)

@@ -116,8 +116,14 @@
     "warningUrlUnreachable": "URL inaccessible",
     "warningUrlFetchFailed": "Échec du téléchargement",
     "warningUrlError": "Erreur URL ({code})",
+    "warningUsedDefaultBoard": "Tableau par défaut utilisé",
+    "warningInvalidBoardSkipped": "Tableau invalide ignoré",
+    "warningMultipleBoardsTrimmed": "Réduit à un seul tableau (priorité max)",
+    "warningMaxBoardsExceeded": "Nb max de tableaux dépassé, réduit",
+    "warningNoValidBoardLeft": "Aucun tableau valide disponible",
     "skipReasonUrlBecame404": "URL devenue 404 après vérification",
     "skipReasonDuplicateFingerprint": "Empreinte en double",
+    "skipReasonBoardBecameInvalid": "Tableau devenu invalide",
     "batchImportSkipped": "Ignoré",
     "batchImportSkippedCount": "{count} ignorés"
 }

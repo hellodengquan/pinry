@@ -286,3 +286,248 @@ class PinTests(APITestCase):
         uri = reverse("pin-detail", kwargs={"pk": pin.pk})
         self.client.delete(uri)
         self.assertEqual(Pin.objects.count(), 0)
+
+
+def mock_requests_head_404(url, **kwargs):
+    resp = mock.Mock()
+    resp.status_code = 404
+    return resp
+
+
+def mock_requests_head_ok(url, **kwargs):
+    resp = mock.Mock()
+    resp.status_code = 200
+    return resp
+
+
+class BatchImportSkippedTests(APITestCase):
+    """
+    批量导入三种 skipped 原因的单元测试
+
+    skipped 原因分类：
+    1. url_became_404     → 导入时二次检测发现 URL 返回 404
+    2. duplicate_fingerprint → 导入时检测到 MD5 与已有或批次内重复
+    3. board_became_invalid → 导入时发现所有指定 board 均失效
+    """
+
+    _JSON_TYPE = "application/json"
+
+    def setUp(self):
+        super(BatchImportSkippedTests, self).setUp()
+        self.user = create_user("batch_test")
+        self.client.login(username=self.user.username, password='password')
+        self.board1 = Board.objects.create(name="board_1", submitter=self.user)
+        self.board2 = Board.objects.create(name="board_2", submitter=self.user)
+        self.batch_import_url = reverse("pin-batch-import")
+
+    def tearDown(self):
+        _teardown_models()
+
+    @mock.patch('requests.head', mock_requests_head_404)
+    @mock.patch('requests.get', mock_requests_get)
+    def test_skip_reason_url_became_404(self):
+        """
+        场景 1: url_became_404
+        预检通过后，URL 在导入期二次检测（HEAD）时返回 404
+        → 该条目应出现在 skipped 中，reason='url_became_404'
+        → 不应创建 Pin
+        """
+        test_url = 'http://example.com/expired-image.png'
+        payload = {
+            "pins": [
+                {
+                    "url": test_url,
+                    "board_ids": [self.board1.id],
+                }
+            ],
+            "url_policy": {
+                "check_404_on_precheck": True,
+                "check_404_on_import": True,
+                "timeout": 5,
+            }
+        }
+        response = self.client.post(
+            self.batch_import_url, data=payload, format="json"
+        )
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+            response.json()
+        )
+        resp = response.json()
+        self.assertEqual(resp['total_created'], 0, "不应创建任何 Pin")
+        self.assertEqual(
+            resp['total_skipped'], 1,
+            f"应有 1 个 skipped，实际 {resp['total_skipped']}: {resp}"
+        )
+        self.assertEqual(
+            resp['skipped'][0]['reason'],
+            'url_became_404',
+            f"skipped 原因应为 url_became_404, 实际 {resp['skipped'][0]['reason']}"
+        )
+        self.assertEqual(
+            resp['skipped'][0]['url'],
+            test_url,
+            "skipped 条目应保留原始 URL"
+        )
+        self.assertEqual(Pin.objects.count(), 0, "数据库中不应有 Pin")
+
+    @mock.patch('requests.head', mock_requests_head_ok)
+    @mock.patch('requests.get', mock_requests_get)
+    def test_skip_reason_duplicate_fingerprint(self):
+        """
+        场景 2: duplicate_fingerprint
+        导入时第二条与第一条下载后 MD5 完全一致（同一张 mock 图）
+        → 第二条应出现在 skipped 中，reason='duplicate_fingerprint'
+        → 仅第一条成功创建 Pin
+        """
+        url_a = 'http://example.com/image-a.png'
+        url_b = 'http://example.com/image-b-same-content.png'
+        payload = {
+            "pins": [
+                {"url": url_a, "board_ids": [self.board1.id]},
+                {"url": url_b, "board_ids": [self.board2.id]},
+            ],
+            "fingerprint_policy": {
+                "enable_exact_match": True,
+                "enable_phash_match": False,
+            },
+            "url_policy": {
+                "check_404_on_precheck": False,
+                "check_404_on_import": False,
+            }
+        }
+        response = self.client.post(
+            self.batch_import_url, data=payload, format="json"
+        )
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+            response.json()
+        )
+        resp = response.json()
+        self.assertEqual(
+            resp['total_created'], 1,
+            f"仅应创建 1 个 Pin，实际 {resp['total_created']}: {resp}"
+        )
+        self.assertEqual(
+            resp['total_skipped'], 1,
+            f"应有 1 个 skipped，实际 {resp['total_skipped']}: {resp}"
+        )
+        self.assertEqual(
+            resp['skipped'][0]['reason'],
+            'duplicate_fingerprint',
+            f"skipped 原因应为 duplicate_fingerprint, 实际 {resp['skipped'][0]['reason']}"
+        )
+        self.assertEqual(Pin.objects.count(), 1, "数据库中应只有 1 个 Pin")
+
+    @mock.patch('requests.head', mock_requests_head_ok)
+    @mock.patch('requests.get', mock_requests_get)
+    def test_skip_reason_board_became_invalid(self):
+        """
+        场景 3: board_became_invalid
+        Pin 指定了 board_id，但在导入期该 Board 已被删除或权限丢失
+        → 该条目应出现在 skipped 中，reason='board_became_invalid'
+        → 不应创建 Pin
+        """
+        non_existent_board_id = 99999
+        test_url = 'http://example.com/image-no-valid-board.png'
+        payload = {
+            "pins": [
+                {
+                    "url": test_url,
+                    "board_ids": [non_existent_board_id],
+                }
+            ],
+            "url_policy": {
+                "check_404_on_precheck": False,
+                "check_404_on_import": False,
+            }
+        }
+        response = self.client.post(
+            self.batch_import_url, data=payload, format="json"
+        )
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+            response.json()
+        )
+        resp = response.json()
+        self.assertEqual(resp['total_created'], 0, "不应创建任何 Pin")
+        self.assertEqual(
+            resp['total_skipped'], 1,
+            f"应有 1 个 skipped，实际 {resp['total_skipped']}: {resp}"
+        )
+        self.assertEqual(
+            resp['skipped'][0]['reason'],
+            'board_became_invalid',
+            f"skipped 原因应为 board_became_invalid, 实际 {resp['skipped'][0]['reason']}"
+        )
+        self.assertEqual(Pin.objects.count(), 0, "数据库中不应有 Pin")
+
+    @mock.patch('requests.head', mock_requests_head_ok)
+    @mock.patch('requests.get', mock_requests_get)
+    def test_mixed_skipped_and_created(self):
+        """
+        混合场景：三个 Pin 分别命中三种 skipped 原因 + 一个正常 Pin
+        → 仅正常 Pin 成功创建
+        → skipped 数组包含三条，三种原因各一条
+        """
+        # 场景准备: 先创建一个 Pin 作为 fingerprint 重复源
+        with mock.patch('requests.get', mock_requests_get):
+            existing_img = create_image()
+            create_pin(self.user, image=existing_img, tags=[])
+
+        non_existent_board_id = 88888
+        url_normal = 'http://example.com/normal.png'
+        url_404 = 'http://example.com/expired.png'
+        url_dup = 'http://example.com/dup-fingerprint.png'
+        url_invalid_board = 'http://example.com/invalid-board.png'
+
+        payload = {
+            "pins": [
+                {"url": url_normal, "board_ids": [self.board1.id]},
+                {"url": url_404, "board_ids": [self.board1.id]},
+                {"url": url_dup, "board_ids": [self.board1.id]},
+                {"url": url_invalid_board, "board_ids": [non_existent_board_id]},
+            ],
+            "fingerprint_policy": {
+                "enable_exact_match": True,
+                "enable_phash_match": False,
+            },
+            "url_policy": {
+                "check_404_on_precheck": True,
+                "check_404_on_import": True,
+            }
+        }
+
+        # 分别替换：404 的用 head 404，其他用 head 200；下载内容都相同（用于触发 fingerprint 重复）
+        def variable_head(url, **kwargs):
+            if url == url_404:
+                return mock_requests_head_404(url, **kwargs)
+            return mock_requests_head_ok(url, **kwargs)
+
+        with mock.patch('requests.head', variable_head):
+            response = self.client.post(
+                self.batch_import_url, data=payload, format="json"
+            )
+
+        resp = response.json()
+        self.assertEqual(
+            resp['total_created'], 1,
+            f"仅应创建 1 个 Pin，实际 {resp['total_created']}: {resp}"
+        )
+        skipped_reasons = [s['reason'] for s in resp['skipped']]
+        self.assertIn(
+            'url_became_404', skipped_reasons,
+            f"应包含 url_became_404, 实际有: {skipped_reasons}"
+        )
+        self.assertIn(
+            'duplicate_fingerprint', skipped_reasons,
+            f"应包含 duplicate_fingerprint, 实际有: {skipped_reasons}"
+        )
+        self.assertIn(
+            'board_became_invalid', skipped_reasons,
+            f"应包含 board_became_invalid, 实际有: {skipped_reasons}"
+        )
+        self.assertEqual(len(resp['skipped']), 3, f"应有 3 个 skipped, 实际 {len(resp['skipped'])}")

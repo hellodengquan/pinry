@@ -25,6 +25,23 @@ def calculate_md5(file_obj):
 
 
 def calculate_phash(file_obj):
+    """
+    计算平均感知哈希（aHash / meanHash）
+
+    算法原理：
+      1. 将图片缩放到 8x8 = 64 像素
+      2. 转为灰度图（单通道 L）
+      3. 计算 64 个像素的平均值
+      4. 逐个像素与平均值比较，得到 64 位二进制指纹
+      5. 转为 16 字符十六进制字符串存储
+
+    汉明距离推荐阈值（结合实际业务）：
+      距离 0-2 : 近乎完全相同 → 格式转换 / 无损压缩 / 仅 EXIF 信息变更
+      距离 3-4 : 高度相似   → 不同压缩等级 / 去水印 / 轻微调色
+      距离 5   : 平衡推荐值  → 兼容缩放、裁剪、滤镜（默认阈值，业界通用值）
+      距离 6-7 : 宽松匹配   → 可识别二次编辑、添加文字，但误报率上升
+      距离 8+  : 仅粗略分类  → 不建议用于重复检测
+    """
     try:
         file_obj.seek(0)
         img = PILImage.open(file_obj)
@@ -40,6 +57,15 @@ def calculate_phash(file_obj):
 
 
 def hamming_distance(hash1, hash2):
+    """
+    计算两个 pHash 的汉明距离
+
+    返回值说明：
+      - 0  : 完全一致
+      - <=5: 视为相似图片（默认阈值）
+      - >5 : 视为不同图片
+      - 999: 任一 hash 为空，无法比较
+    """
     if hash1 is None or hash2 is None:
         return 999
     return bin(int(hash1, 16) ^ int(hash2, 16)).count('1')
@@ -93,6 +119,17 @@ class Image(models.Model):
         super(Image, self).save(*args, **kwargs)
 
     def find_similar(self, max_distance=5):
+        """
+        查找相似图片
+
+        Args:
+            max_distance: 汉明距离阈值，默认 5（平衡推荐值）
+
+        建议的阈值选择建议：
+            max_distance=2 → 仅极相似
+            max_distance=5 → 相似（推荐默认）
+            max_distance=8 → 宽松匹配
+        """
         if not self.phash:
             return Image.objects.none()
         similar = []

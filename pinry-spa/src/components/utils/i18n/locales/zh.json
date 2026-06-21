@@ -116,8 +116,14 @@
   "warningUrlUnreachable": "链接无法访问",
   "warningUrlFetchFailed": "图片下载失败",
   "warningUrlError": "链接错误（{code}）",
+  "warningUsedDefaultBoard": "已使用默认画板",
+  "warningInvalidBoardSkipped": "已跳过无效画板",
+  "warningMultipleBoardsTrimmed": "已裁剪为单画板（最高优先级）",
+  "warningMaxBoardsExceeded": "画板数量超过上限，已裁剪",
+  "warningNoValidBoardLeft": "无有效画板可用",
   "skipReasonUrlBecame404": "预检后变为 404",
   "skipReasonDuplicateFingerprint": "指纹重复",
+  "skipReasonBoardBecameInvalid": "画板已失效",
   "batchImportSkipped": "跳过",
   "batchImportSkippedCount": "跳过 {count} 个"
 }

@@ -387,6 +387,11 @@ export default {
         similar_in_batch: this.$t('warningSimilarInBatch'),
         url_unreachable: this.$t('warningUrlUnreachable'),
         url_fetch_failed: this.$t('warningUrlFetchFailed'),
+        used_default_board: this.$t('warningUsedDefaultBoard'),
+        invalid_board_skipped: this.$t('warningInvalidBoardSkipped'),
+        multiple_boards_trimmed: this.$t('warningMultipleBoardsTrimmed'),
+        max_boards_exceeded: this.$t('warningMaxBoardsExceeded'),
+        no_valid_board_left: this.$t('warningNoValidBoardLeft'),
       };
       if (warning.startsWith('url_error_')) {
         const code = warning.replace('url_error_', '');
@@ -398,6 +403,7 @@ export default {
       const map = {
         url_became_404: this.$t('skipReasonUrlBecame404'),
         duplicate_fingerprint: this.$t('skipReasonDuplicateFingerprint'),
+        board_became_invalid: this.$t('skipReasonBoardBecameInvalid'),
       };
       return map[reason] || reason;
     },

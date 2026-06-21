@@ -276,20 +276,95 @@ class TagAutoCompleteSerializer(serializers.ModelSerializer):
 
 
 class BatchFingerprintPolicySerializer(serializers.Serializer):
-    enable_exact_match = serializers.BooleanField(default=True, help_text="MD5 exact match - blocks duplicate imports")
-    enable_phash_match = serializers.BooleanField(default=True, help_text="Perceptual hash - warns on similar images")
-    phash_threshold = serializers.IntegerField(default=5, min_value=0, max_value=32, help_text="pHash Hamming distance threshold")
+    """
+    指纹匹配策略配置
+
+    pHash 阈值选择依据（基于 DCT 感知哈希算法）：
+    - 阈值 0-2：几乎完全相同（仅格式转换/极轻微压缩），误报率极低
+    - 阈值 3-4：高度相似（不同压缩等级/水印），适合严格去重场景
+    - 阈值 5  ：平衡值（默认），涵盖缩放/裁剪/滤镜等常见变体，
+               误报率约 0.1%，漏报率约 5%（行业通用推荐值）
+    - 阈值 6-7：宽松匹配，可识别二次编辑，但误报率显著上升
+    - 阈值 8+ ：仅做粗略分类，不建议用于重复检测
+    """
+    enable_exact_match = serializers.BooleanField(
+        default=True,
+        help_text="MD5 精确匹配 - 完全相同的图片，命中后阻止导入（精确去重）"
+    )
+    enable_phash_match = serializers.BooleanField(
+        default=True,
+        help_text="感知哈希匹配 - 检测相似/变体图片，命中后仅警告（相似提醒）"
+    )
+    phash_threshold = serializers.IntegerField(
+        default=5,
+        min_value=0,
+        max_value=32,
+        help_text=(
+            "pHash 汉明距离阈值："
+            "0-2=几乎完全相同，3-4=高度相似，"
+            "5=平衡推荐值（默认），6-7=宽松匹配，8+=仅粗略分类"
+        )
+    )
 
 
 class BatchBoardPolicySerializer(serializers.Serializer):
-    allow_multiple_boards = serializers.BooleanField(default=True, help_text="Allow assigning one pin to multiple boards")
-    dedupe_board_ids = serializers.BooleanField(default=True, help_text="Auto-remove duplicate board IDs")
+    """
+    多 Board 归属策略
+
+    优先级规则：
+    - 按 board_ids 传入顺序决定优先级（靠前 = 优先级高）
+    - 当 allow_multiple_boards=False 时，只保留优先级最高的一个
+    - 当部分 board 无效时，用后续有效 board 依次补位
+    - default_board_ids 在用户未指定 board 时使用
+    """
+    allow_multiple_boards = serializers.BooleanField(
+        default=True,
+        help_text="是否允许多画板归属：True=一个 Pin 分到多个画板，False=只保留优先级最高的一个"
+    )
+    dedupe_board_ids = serializers.BooleanField(
+        default=True,
+        help_text="是否自动去除重复的 board_id（保留首次出现，即优先级最高的）"
+    )
+    default_board_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        required=False,
+        default=list,
+        help_text="默认画板 ID 列表：当用户未指定 board_ids 时使用这些画板，同样按优先级排序"
+    )
+    max_boards_per_pin = serializers.IntegerField(
+        default=0,
+        min_value=0,
+        help_text="单 Pin 最大归属画板数：0=不限制，>0 时只保留优先级最高的 N 个有效画板"
+    )
 
 
 class BatchUrlPolicySerializer(serializers.Serializer):
-    check_404_on_precheck = serializers.BooleanField(default=True, help_text="Check for 404 during precheck phase")
-    check_404_on_import = serializers.BooleanField(default=True, help_text="Quick recheck for 404 before actual import")
-    timeout = serializers.IntegerField(default=10, min_value=1, max_value=60)
+    """
+    URL 有效性检测策略
+
+    两阶段检测：
+    - 预检期：完整检测（HEAD + GET），向用户展示详细结果
+    - 导入期：快速检测（仅 HEAD），防止预检后资源又被删除
+
+    skipped 原因分类：
+    - url_became_404    ：导入时二次检测发现 404（预检通过后失效）
+    - duplicate_fingerprint：导入时二次校验发现 MD5 与已有/批次内重复
+    - (更多可扩展)
+    """
+    check_404_on_precheck = serializers.BooleanField(
+        default=True,
+        help_text="预检期 404 检测：HEAD 请求 + 完整下载，生成详细预检报告"
+    )
+    check_404_on_import = serializers.BooleanField(
+        default=True,
+        help_text="导入期快速二次校验：仅 HEAD 请求，防止预检后链路失效导致 404"
+    )
+    timeout = serializers.IntegerField(
+        default=10,
+        min_value=1,
+        max_value=60,
+        help_text="网络请求超时时间（秒）"
+    )
 
 
 class BatchPinItemSerializer(serializers.Serializer):
