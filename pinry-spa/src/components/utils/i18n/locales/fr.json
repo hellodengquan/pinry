@@ -105,9 +105,19 @@
     "issueMissingUrl": "URL manquante",
     "issueInvalidBoard": "Le tableau n'existe pas",
     "issueUrl404": "URL retourne 404",
+    "issueMultipleBoardsNotAllowed": "Plusieurs tableaux non autorisés",
+    "issueDuplicateFingerprint": "Empreinte en double (existe déjà)",
     "warningMissingBoard": "Aucun tableau assigné",
+    "warningDuplicateBoards": "IDs de tableau en double",
     "warningDuplicateFingerprint": "Empreinte en double (existe déjà)",
     "warningDuplicateInBatch": "Doublon dans le lot",
+    "warningSimilarFingerprint": "Image similaire détectée",
+    "warningSimilarInBatch": "Image similaire dans le lot",
     "warningUrlUnreachable": "URL inaccessible",
-    "warningUrlError": "Erreur URL ({code})"
+    "warningUrlFetchFailed": "Échec du téléchargement",
+    "warningUrlError": "Erreur URL ({code})",
+    "skipReasonUrlBecame404": "URL devenue 404 après vérification",
+    "skipReasonDuplicateFingerprint": "Empreinte en double",
+    "batchImportSkipped": "Ignoré",
+    "batchImportSkippedCount": "{count} ignorés"
 }

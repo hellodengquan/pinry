@@ -108,13 +108,46 @@ const Pin = {
       data,
     );
   },
-  batchPrecheck(pins) {
+  batchPrecheck(pins, options = {}) {
     const url = `${API_PREFIX}pins/batch-precheck/`;
-    return axios.post(url, { pins });
+    return axios.post(url, {
+      pins,
+      fingerprint_policy: options.fingerprintPolicy || {
+        enable_exact_match: true,
+        enable_phash_match: true,
+        phash_threshold: 5,
+      },
+      board_policy: options.boardPolicy || {
+        allow_multiple_boards: true,
+        dedupe_board_ids: true,
+      },
+      url_policy: options.urlPolicy || {
+        check_404_on_precheck: true,
+        check_404_on_import: true,
+        timeout: 10,
+      },
+    });
   },
-  batchImport(pins) {
+  batchImport(pins, options = {}) {
     const url = `${API_PREFIX}pins/batch-import/`;
-    return axios.post(url, { pins });
+    return axios.post(url, {
+      pins,
+      fingerprint_policy: options.fingerprintPolicy || {
+        enable_exact_match: true,
+        enable_phash_match: true,
+        phash_threshold: 5,
+      },
+      board_policy: options.boardPolicy || {
+        allow_multiple_boards: true,
+        dedupe_board_ids: true,
+      },
+      url_policy: options.urlPolicy || {
+        check_404_on_precheck: true,
+        check_404_on_import: true,
+        timeout: 10,
+      },
+      skip_prechecked_valid: options.skipPrecheckedValid || false,
+    });
   },
 };
 

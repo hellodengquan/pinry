@@ -168,7 +168,20 @@
                 <span v-if="importResult.total_failed > 0">
                   ，{{ $t("batchImportFailedCount", { count: importResult.total_failed }) }}
                 </span>
+                <span v-if="importResult.total_skipped > 0">
+                  ，{{ $t("batchImportSkippedCount", { count: importResult.total_skipped }) }}
+                </span>
               </p>
+              <div v-if="importResult.skipped && importResult.skipped.length > 0" class="mt-4">
+                <p class="heading">{{ $t("batchImportSkipped") }}:</p>
+                <div class="is-size-7 has-text-left" style="max-height: 150px; overflow-y: auto;">
+                  <div v-for="item in importResult.skipped" :key="item.index" class="mb-1">
+                    <span class="has-text-grey">#{{ item.index + 1 }}</span>
+                    <a :href="item.url" target="_blank" class="ml-2">{{ item.url }}</a>
+                    <span class="tag is-warning is-small ml-2">{{ getSkipReasonLabel(item.reason) }}</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -359,21 +372,34 @@ export default {
         missing_url: this.$t('issueMissingUrl'),
         invalid_board: this.$t('issueInvalidBoard'),
         url_404: this.$t('issueUrl404'),
+        multiple_boards_not_allowed: this.$t('issueMultipleBoardsNotAllowed'),
+        duplicate_fingerprint: this.$t('issueDuplicateFingerprint'),
       };
       return map[issue] || issue;
     },
     getWarningLabel(warning) {
       const map = {
         missing_board: this.$t('warningMissingBoard'),
+        duplicate_boards: this.$t('warningDuplicateBoards'),
         duplicate_fingerprint: this.$t('warningDuplicateFingerprint'),
         duplicate_in_batch: this.$t('warningDuplicateInBatch'),
+        similar_fingerprint: this.$t('warningSimilarFingerprint'),
+        similar_in_batch: this.$t('warningSimilarInBatch'),
         url_unreachable: this.$t('warningUrlUnreachable'),
+        url_fetch_failed: this.$t('warningUrlFetchFailed'),
       };
       if (warning.startsWith('url_error_')) {
         const code = warning.replace('url_error_', '');
         return this.$t('warningUrlError', { code });
       }
       return map[warning] || warning;
+    },
+    getSkipReasonLabel(reason) {
+      const map = {
+        url_became_404: this.$t('skipReasonUrlBecame404'),
+        duplicate_fingerprint: this.$t('skipReasonDuplicateFingerprint'),
+      };
+      return map[reason] || reason;
     },
     goBack() {
       this.step = 'input';

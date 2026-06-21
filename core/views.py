@@ -15,6 +15,7 @@ from core import serializers as api
 from core.models import Image, Pin, Board
 from core.permissions import IsOwnerOrReadOnly, OwnerOnlyIfPrivate
 from core.serializers import filter_private_pin, filter_private_board
+from django_images.models import calculate_md5, calculate_phash, hamming_distance
 
 
 class ImageViewSet(mixins.CreateModelMixin, GenericViewSet):
@@ -38,18 +39,113 @@ class PinViewSet(viewsets.ModelViewSet):
         request = self.request
         return filter_private_pin(request, query)
 
+    @staticmethod
+    def _get_headers(referer=None):
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 5.1) '
+                          'AppleWebKit/537.36 (KHTML, like Gecko) '
+                          'Chrome/48.0.2564.82 Safari/537.36',
+        }
+        if referer:
+            headers['Referer'] = referer
+        return headers
+
+    def _check_url_404(self, url, referer=None, timeout=10):
+        try:
+            resp = requests.head(
+                url,
+                headers=self._get_headers(referer),
+                timeout=timeout,
+                allow_redirects=True,
+            )
+            if resp.status_code == 404:
+                return '404'
+            if resp.status_code >= 400:
+                return f'error_{resp.status_code}'
+            return None
+        except requests.exceptions.RequestException:
+            return 'unreachable'
+
+    def _check_boards(self, board_ids, user_board_ids, board_policy):
+        issues = []
+        warnings = []
+        processed_ids = list(board_ids)
+
+        if len(board_ids) != len(set(board_ids)):
+            warnings.append('duplicate_boards')
+            if board_policy.get('dedupe_board_ids', True):
+                processed_ids = list(set(board_ids))
+
+        if not board_policy.get('allow_multiple_boards', True) and len(processed_ids) > 1:
+            issues.append('multiple_boards_not_allowed')
+            processed_ids = processed_ids[:1]
+
+        invalid_boards = [bid for bid in processed_ids if bid not in user_board_ids]
+        if invalid_boards:
+            issues.append('invalid_board')
+
+        if not processed_ids:
+            warnings.append('missing_board')
+
+        return issues, warnings, processed_ids
+
+    def _check_fingerprints(self, img_content, url, user, md5_seen, phash_seen,
+                           fp_policy):
+        issues = []
+        warnings = []
+        hashes = {'md5': None, 'phash': None}
+
+        from io import BytesIO
+        img_buf = BytesIO(img_content)
+
+        if fp_policy.get('enable_exact_match', True):
+            md5 = calculate_md5(img_buf)
+            hashes['md5'] = md5
+            if md5 in md5_seen:
+                issues.append('duplicate_fingerprint')
+            elif Image.objects.filter(hash=md5, pin__submitter=user).exists():
+                issues.append('duplicate_fingerprint')
+            md5_seen.add(md5)
+
+        if fp_policy.get('enable_phash_match', True):
+            phash = calculate_phash(img_buf)
+            hashes['phash'] = phash
+            if phash:
+                threshold = fp_policy.get('phash_threshold', 5)
+                for existing_phash in phash_seen:
+                    if hamming_distance(phash, existing_phash) <= threshold:
+                        warnings.append('similar_in_batch')
+                        break
+                for existing_img in Image.objects.filter(
+                    phash__isnull=False,
+                    pin__submitter=user
+                ):
+                    if hamming_distance(phash, existing_img.phash) <= threshold:
+                        warnings.append('similar_fingerprint')
+                        break
+                phash_seen.add(phash)
+
+        return issues, warnings, hashes
+
     @action(detail=False, methods=['post'], url_path='batch-precheck')
     def batch_precheck(self, request):
         serializer = api.BatchPrecheckRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         pins_data = serializer.validated_data['pins']
+        fp_policy = serializer.validated_data.get('fingerprint_policy', {})
+        board_policy = serializer.validated_data.get('board_policy', {})
+        url_policy = serializer.validated_data.get('url_policy', {})
 
         user = request.user
         user_boards = Board.objects.filter(submitter=user)
         user_board_ids = set(user_boards.values_list('id', flat=True))
 
         results = []
-        url_hashes_seen = set()
+        md5_hashes_seen = set()
+        phash_hashes_seen = set()
+
+        check_404 = url_policy.get('check_404_on_precheck', True)
+        timeout = url_policy.get('timeout', 10)
 
         for idx, pin_data in enumerate(pins_data):
             item_result = {
@@ -59,6 +155,8 @@ class PinViewSet(viewsets.ModelViewSet):
                 'issues': [],
                 'warnings': [],
                 'can_import': True,
+                'image_hashes': {},
+                'board_ids': [],
             }
 
             if not pin_data.get('url'):
@@ -66,57 +164,48 @@ class PinViewSet(viewsets.ModelViewSet):
                 item_result['can_import'] = False
 
             board_ids = pin_data.get('board_ids', [])
-            if not board_ids:
-                item_result['warnings'].append('missing_board')
-            else:
-                invalid_boards = [bid for bid in board_ids if bid not in user_board_ids]
-                if invalid_boards:
-                    item_result['issues'].append('invalid_board')
-                    item_result['can_import'] = False
+            board_issues, board_warnings, processed_board_ids = self._check_boards(
+                board_ids, user_board_ids, board_policy
+            )
+            item_result['issues'].extend(board_issues)
+            item_result['warnings'].extend(board_warnings)
+            item_result['board_ids'] = processed_board_ids
+            if board_issues:
+                item_result['can_import'] = False
 
-            if pin_data.get('url'):
-                url = pin_data['url']
-                try:
-                    headers = {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 5.1) '
-                                      'AppleWebKit/537.36 (KHTML, like Gecko) '
-                                      'Chrome/48.0.2564.82 Safari/537.36',
-                    }
-                    referer = pin_data.get('referer')
-                    if referer:
-                        headers['Referer'] = referer
-                    resp = requests.head(url, headers=headers, timeout=10, allow_redirects=True)
-                    if resp.status_code == 404:
+            url = pin_data.get('url')
+            if url:
+                if check_404:
+                    url_status = self._check_url_404(
+                        url, pin_data.get('referer'), timeout
+                    )
+                    if url_status == '404':
                         item_result['issues'].append('url_404')
                         item_result['can_import'] = False
-                    elif resp.status_code >= 400:
-                        item_result['warnings'].append(f'url_error_{resp.status_code}')
-                except requests.exceptions.RequestException:
-                    item_result['warnings'].append('url_unreachable')
+                    elif url_status and url_status.startswith('error_'):
+                        item_result['warnings'].append(f'url_{url_status}')
+                    elif url_status == 'unreachable':
+                        item_result['warnings'].append('url_unreachable')
 
                 try:
-                    headers = {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 5.1) '
-                                      'AppleWebKit/537.36 (KHTML, like Gecko) '
-                                      'Chrome/48.0.2564.82 Safari/537.36',
-                    }
-                    referer = pin_data.get('referer')
-                    if referer:
-                        headers['Referer'] = referer
-                    img_resp = requests.get(url, headers=headers, timeout=15)
+                    img_resp = requests.get(
+                        url,
+                        headers=self._get_headers(pin_data.get('referer')),
+                        timeout=timeout + 5,
+                    )
                     if img_resp.status_code == 200:
-                        hasher = hashlib.md5()
-                        hasher.update(img_resp.content)
-                        img_hash = hasher.hexdigest()
-
-                        if Image.objects.filter(hash=img_hash, pin__submitter=user).exists():
-                            item_result['warnings'].append('duplicate_fingerprint')
-                        if img_hash in url_hashes_seen:
-                            item_result['warnings'].append('duplicate_in_batch')
-                        url_hashes_seen.add(img_hash)
-                        item_result['image_hash'] = img_hash
+                        fp_issues, fp_warnings, hashes = self._check_fingerprints(
+                            img_resp.content, url, user,
+                            md5_hashes_seen, phash_hashes_seen,
+                            fp_policy
+                        )
+                        item_result['issues'].extend(fp_issues)
+                        item_result['warnings'].extend(fp_warnings)
+                        item_result['image_hashes'] = hashes
+                        if fp_issues:
+                            item_result['can_import'] = False
                 except requests.exceptions.RequestException:
-                    pass
+                    item_result['warnings'].append('url_fetch_failed')
 
             results.append(item_result)
 
@@ -134,10 +223,23 @@ class PinViewSet(viewsets.ModelViewSet):
         serializer = api.BatchImportRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         pins_data = serializer.validated_data['pins']
+        fp_policy = serializer.validated_data.get('fingerprint_policy', {})
+        board_policy = serializer.validated_data.get('board_policy', {})
+        url_policy = serializer.validated_data.get('url_policy', {})
+        skip_prechecked = serializer.validated_data.get('skip_prechecked_valid', False)
 
         user = request.user
+        user_boards = Board.objects.filter(submitter=user)
+        user_board_ids = set(user_boards.values_list('id', flat=True))
+
         created_pins = []
         failed_pins = []
+        skipped_pins = []
+        md5_hashes_seen = set()
+        phash_hashes_seen = set()
+
+        quick_check_404 = url_policy.get('check_404_on_import', True)
+        timeout = url_policy.get('timeout', 10)
 
         for idx, pin_data in enumerate(pins_data):
             try:
@@ -151,6 +253,55 @@ class PinViewSet(viewsets.ModelViewSet):
                 if not url:
                     failed_pins.append({'index': idx, 'error': 'missing_url'})
                     continue
+
+                _, _, processed_board_ids = self._check_boards(
+                    board_ids, user_board_ids, board_policy
+                )
+
+                if quick_check_404 and not skip_prechecked:
+                    url_status = self._check_url_404(url, referer, timeout)
+                    if url_status == '404':
+                        skipped_pins.append({
+                            'index': idx,
+                            'url': url,
+                            'reason': 'url_became_404'
+                        })
+                        continue
+
+                try:
+                    img_resp = requests.get(
+                        url,
+                        headers=self._get_headers(referer),
+                        timeout=timeout + 5,
+                    )
+                    if img_resp.status_code != 200:
+                        failed_pins.append({
+                            'index': idx,
+                            'error': f'url_error_{img_resp.status_code}'
+                        })
+                        continue
+                except requests.exceptions.RequestException as e:
+                    failed_pins.append({
+                        'index': idx,
+                        'error': f'url_fetch_failed: {str(e)}'
+                    })
+                    continue
+
+                from io import BytesIO
+                img_buf = BytesIO(img_resp.content)
+
+                if fp_policy.get('enable_exact_match', True):
+                    md5 = calculate_md5(img_buf)
+                    if md5 in md5_hashes_seen or Image.objects.filter(
+                        hash=md5, pin__submitter=user
+                    ).exists():
+                        skipped_pins.append({
+                            'index': idx,
+                            'url': url,
+                            'reason': 'duplicate_fingerprint'
+                        })
+                        continue
+                    md5_hashes_seen.add(md5)
 
                 image = Image.objects.create_for_url(url, referer)
                 if not image:
@@ -175,10 +326,13 @@ class PinViewSet(viewsets.ModelViewSet):
                         tag_objs.append(tag_obj)
                     pin.tags.set(*tag_objs)
 
-                for board_id in board_ids:
+                boards_added = []
+                for board_id in processed_board_ids:
                     try:
                         board = Board.objects.get(id=board_id, submitter=user)
-                        board.pins.add(pin)
+                        if not board.pins.filter(id=pin.id).exists():
+                            board.pins.add(pin)
+                            boards_added.append(board_id)
                     except Board.DoesNotExist:
                         pass
 
@@ -186,6 +340,7 @@ class PinViewSet(viewsets.ModelViewSet):
                     'index': idx,
                     'id': pin.id,
                     'url': pin.url,
+                    'board_ids': boards_added,
                 })
             except Exception as e:
                 failed_pins.append({'index': idx, 'error': str(e)})
@@ -193,8 +348,10 @@ class PinViewSet(viewsets.ModelViewSet):
         return Response({
             'created': created_pins,
             'failed': failed_pins,
+            'skipped': skipped_pins,
             'total_created': len(created_pins),
             'total_failed': len(failed_pins),
+            'total_skipped': len(skipped_pins),
         }, status=status.HTTP_201_CREATED if created_pins else status.HTTP_400_BAD_REQUEST)
 
 

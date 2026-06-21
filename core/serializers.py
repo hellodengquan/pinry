@@ -275,6 +275,23 @@ class TagAutoCompleteSerializer(serializers.ModelSerializer):
         fields = ('name', )
 
 
+class BatchFingerprintPolicySerializer(serializers.Serializer):
+    enable_exact_match = serializers.BooleanField(default=True, help_text="MD5 exact match - blocks duplicate imports")
+    enable_phash_match = serializers.BooleanField(default=True, help_text="Perceptual hash - warns on similar images")
+    phash_threshold = serializers.IntegerField(default=5, min_value=0, max_value=32, help_text="pHash Hamming distance threshold")
+
+
+class BatchBoardPolicySerializer(serializers.Serializer):
+    allow_multiple_boards = serializers.BooleanField(default=True, help_text="Allow assigning one pin to multiple boards")
+    dedupe_board_ids = serializers.BooleanField(default=True, help_text="Auto-remove duplicate board IDs")
+
+
+class BatchUrlPolicySerializer(serializers.Serializer):
+    check_404_on_precheck = serializers.BooleanField(default=True, help_text="Check for 404 during precheck phase")
+    check_404_on_import = serializers.BooleanField(default=True, help_text="Quick recheck for 404 before actual import")
+    timeout = serializers.IntegerField(default=10, min_value=1, max_value=60)
+
+
 class BatchPinItemSerializer(serializers.Serializer):
     url = serializers.CharField(max_length=2048, required=False, allow_blank=True, allow_null=True)
     referer = serializers.CharField(max_length=2048, required=False, allow_blank=True, allow_null=True)
@@ -291,10 +308,28 @@ class BatchPinItemSerializer(serializers.Serializer):
         default=list
     )
 
+    def validate_board_ids(self, value):
+        seen = set()
+        duplicates = []
+        for bid in value:
+            if bid in seen:
+                duplicates.append(bid)
+            seen.add(bid)
+        if duplicates:
+            self.context['duplicate_boards'] = duplicates
+        return list(seen)
+
 
 class BatchPrecheckRequestSerializer(serializers.Serializer):
     pins = BatchPinItemSerializer(many=True, required=True)
+    fingerprint_policy = BatchFingerprintPolicySerializer(required=False, default=dict)
+    board_policy = BatchBoardPolicySerializer(required=False, default=dict)
+    url_policy = BatchUrlPolicySerializer(required=False, default=dict)
 
 
 class BatchImportRequestSerializer(serializers.Serializer):
     pins = BatchPinItemSerializer(many=True, required=True)
+    fingerprint_policy = BatchFingerprintPolicySerializer(required=False, default=dict)
+    board_policy = BatchBoardPolicySerializer(required=False, default=dict)
+    url_policy = BatchUrlPolicySerializer(required=False, default=dict)
+    skip_prechecked_valid = serializers.BooleanField(default=False, help_text="Skip revalidation if precheck already passed")

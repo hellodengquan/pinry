@@ -1,9 +1,11 @@
 import hashlib
 import os.path
+from io import BytesIO
 
 from django.db import models
 from django.core.files.uploadedfile import InMemoryUploadedFile
 from django.dispatch import receiver
+from PIL import Image as PILImage
 
 from importlib import import_module
 
@@ -11,6 +13,36 @@ from django.urls import reverse
 
 from . import utils
 from .settings import IMAGE_SIZES, IMAGE_PATH, IMAGE_AUTO_DELETE
+
+
+def calculate_md5(file_obj):
+    hasher = hashlib.md5()
+    file_obj.seek(0)
+    for chunk in iter(lambda: file_obj.read(8192), b''):
+        hasher.update(chunk)
+    file_obj.seek(0)
+    return hasher.hexdigest()
+
+
+def calculate_phash(file_obj):
+    try:
+        file_obj.seek(0)
+        img = PILImage.open(file_obj)
+        img = img.convert('L').resize((8, 8), PILImage.Resampling.LANCZOS)
+        pixels = list(img.getdata())
+        avg = sum(pixels) / 64
+        bits = ''.join('1' if p > avg else '0' for p in pixels)
+        file_obj.seek(0)
+        return '%016x' % int(bits, 2)
+    except Exception:
+        file_obj.seek(0)
+        return None
+
+
+def hamming_distance(hash1, hash2):
+    if hash1 is None or hash2 is None:
+        return 999
+    return bin(int(hash1, 16) ^ int(hash2, 16)).count('1')
 
 
 def hashed_upload_to(instance, filename, **kwargs):
@@ -50,14 +82,24 @@ class Image(models.Model):
     height = models.PositiveIntegerField(default=0, editable=False)
     width = models.PositiveIntegerField(default=0, editable=False)
     hash = models.CharField(max_length=32, blank=True, null=True, db_index=True, editable=False)
+    phash = models.CharField(max_length=16, blank=True, null=True, db_index=True, editable=False)
 
     def save(self, *args, **kwargs):
-        if self.image and not self.hash:
-            hasher = hashlib.md5()
-            for chunk in self.image.chunks():
-                hasher.update(chunk)
-            self.hash = hasher.hexdigest()
+        if self.image:
+            if not self.hash:
+                self.hash = calculate_md5(self.image)
+            if not self.phash:
+                self.phash = calculate_phash(self.image)
         super(Image, self).save(*args, **kwargs)
+
+    def find_similar(self, max_distance=5):
+        if not self.phash:
+            return Image.objects.none()
+        similar = []
+        for img in Image.objects.exclude(id=self.id).filter(phash__isnull=False):
+            if hamming_distance(self.phash, img.phash) <= max_distance:
+                similar.append(img)
+        return similar
 
     def get_by_size(self, size):
         return self.thumbnail_set.get(size=size)

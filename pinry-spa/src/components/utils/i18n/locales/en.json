@@ -105,9 +105,19 @@
     "issueMissingUrl": "Missing URL",
     "issueInvalidBoard": "Board does not exist",
     "issueUrl404": "URL returns 404",
+    "issueMultipleBoardsNotAllowed": "Multiple boards not allowed",
+    "issueDuplicateFingerprint": "Duplicate fingerprint (already exists)",
     "warningMissingBoard": "No board assigned",
+    "warningDuplicateBoards": "Duplicate board IDs",
     "warningDuplicateFingerprint": "Duplicate fingerprint (already exists)",
     "warningDuplicateInBatch": "Duplicate within batch",
+    "warningSimilarFingerprint": "Similar image detected",
+    "warningSimilarInBatch": "Similar image within batch",
     "warningUrlUnreachable": "URL unreachable",
-    "warningUrlError": "URL error ({code})"
+    "warningUrlFetchFailed": "Image download failed",
+    "warningUrlError": "URL error ({code})",
+    "skipReasonUrlBecame404": "URL became 404 after precheck",
+    "skipReasonDuplicateFingerprint": "Duplicate fingerprint",
+    "batchImportSkipped": "Skipped",
+    "batchImportSkippedCount": "{count} skipped"
 }

@@ -105,9 +105,19 @@
   "issueMissingUrl": "缺少 URL",
   "issueInvalidBoard": "画板不存在",
   "issueUrl404": "链接 404",
+  "issueMultipleBoardsNotAllowed": "不允许多画板归属",
+  "issueDuplicateFingerprint": "指纹重复（库中已有）",
   "warningMissingBoard": "未归属画板",
+  "warningDuplicateBoards": "包含重复画板 ID",
   "warningDuplicateFingerprint": "指纹重复（库中已有）",
   "warningDuplicateInBatch": "批次内重复",
+  "warningSimilarFingerprint": "检测到相似图片",
+  "warningSimilarInBatch": "批次内存在相似图片",
   "warningUrlUnreachable": "链接无法访问",
-  "warningUrlError": "链接错误（{code}）"
+  "warningUrlFetchFailed": "图片下载失败",
+  "warningUrlError": "链接错误（{code}）",
+  "skipReasonUrlBecame404": "预检后变为 404",
+  "skipReasonDuplicateFingerprint": "指纹重复",
+  "batchImportSkipped": "跳过",
+  "batchImportSkippedCount": "跳过 {count} 个"
 }
